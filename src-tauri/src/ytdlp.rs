@@ -1,11 +1,10 @@
 use crate::config::AppConfig;
 use regex::Regex;
 use reqwest::Client;
+
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::SystemTime;
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::broadcast;
@@ -73,12 +72,12 @@ impl YtDlpManager {
             "yt-dlp.exe"
         } else if cfg!(target_os = "macos") {
             if cfg!(target_arch = "aarch64") {
-                "yt-dlp_macos"  // ARM Mac (Apple Silicon)
+                "yt-dlp_macos" // ARM Mac (Apple Silicon)
             } else {
-                "yt-dlp_macos"  // Intel Mac (same binary, universal)
+                "yt-dlp_macos" // Intel Mac (same binary, universal)
             }
         } else {
-            "yt-dlp"  // Linux
+            "yt-dlp" // Linux
         }
     }
 
@@ -326,10 +325,7 @@ impl YtDlpManager {
             }
 
             if let Some(path) = found_path {
-                let file_name = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("");
+                let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
                 // Cache pruning (best effort)
                 if let Err(e) = self.prune_cache_if_needed().await {
@@ -342,10 +338,7 @@ impl YtDlpManager {
                     percent: Some(100.0),
                     speed: None,
                     eta: None,
-                    message: Some(format!(
-                        "http://localhost:15123/video/files/{}",
-                        file_name
-                    )),
+                    message: Some(format!("http://localhost:15123/video/files/{}", file_name)),
                 });
                 Ok(path)
             } else {
@@ -355,7 +348,6 @@ impl YtDlpManager {
             Err(format!("yt-dlp exited with status: {}", status).into())
         }
     }
-}
 
     async fn prune_cache_if_needed(&self) -> Result<(), String> {
         let max_bytes = self.max_cache_bytes().await;
@@ -363,7 +355,9 @@ impl YtDlpManager {
             return Ok(());
         }
 
-        let mut entries = tokio::fs::read_dir(self.videos_dir()).await.map_err(|e| e.to_string())?;
+        let mut entries = tokio::fs::read_dir(self.videos_dir())
+            .await
+            .map_err(|e| e.to_string())?;
         let mut files: Vec<(PathBuf, SystemTime, u64)> = Vec::new();
         let mut total: u64 = 0;
 
@@ -406,3 +400,4 @@ impl YtDlpManager {
         // 기본값 10GB
         10 * 1024 * 1024 * 1024
     }
+}
