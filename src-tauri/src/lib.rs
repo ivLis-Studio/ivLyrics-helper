@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, AppHandle,
+    Manager, AppHandle, Emitter,
 };
 use tauri_plugin_updater::UpdaterExt;
 use tokio::sync::RwLock;
