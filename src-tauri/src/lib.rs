@@ -3,12 +3,13 @@ mod video_server;
 mod ytdlp;
 
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tauri::{
-    Manager,
-    tray::{TrayIconBuilder, MouseButton, MouseButtonState, TrayIconEvent},
     menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Manager, AppHandle,
 };
+use tauri_plugin_updater::UpdaterExt;
+use tokio::sync::RwLock;
 
 pub use config::{AppConfig, ConfigManager};
 pub use video_server::VideoServer;
@@ -24,7 +25,7 @@ impl AppState {
     pub fn new() -> Self {
         let config_manager = ConfigManager::new();
         let ytdlp = YtDlpManager::new(config_manager.get_video_folder());
-        
+
         Self {
             ytdlp,
             config: Arc::new(RwLock::new(config_manager)),
@@ -41,39 +42,61 @@ async fn get_config(state: tauri::State<'_, Arc<AppState>>) -> Result<AppConfig,
 }
 
 #[tauri::command]
-async fn save_config(state: tauri::State<'_, Arc<AppState>>, config: AppConfig) -> Result<(), String> {
+async fn save_config(
+    state: tauri::State<'_, Arc<AppState>>,
+    config: AppConfig,
+) -> Result<(), String> {
     let mut config_manager = state.config.write().await;
-    config_manager.save_config(&config).map_err(|e| e.to_string())
+    config_manager
+        .save_config(&config)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn get_default_video_folder(state: tauri::State<'_, Arc<AppState>>) -> Result<String, String> {
+async fn get_default_video_folder(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<String, String> {
     let config = state.config.read().await;
     Ok(config.get_default_video_folder())
 }
 
 #[tauri::command]
-async fn update_video_folder(state: tauri::State<'_, Arc<AppState>>, folder: String) -> Result<(), String> {
+async fn update_video_folder(
+    state: tauri::State<'_, Arc<AppState>>,
+    folder: String,
+) -> Result<(), String> {
     let mut config_manager = state.config.write().await;
     let mut config = config_manager.get_config().clone();
     config.videoFolder = folder;
-    config_manager.save_config(&config).map_err(|e| e.to_string())
+    config_manager
+        .save_config(&config)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn update_max_cache(state: tauri::State<'_, Arc<AppState>>, max_cache_gb: u32) -> Result<(), String> {
+async fn update_max_cache(
+    state: tauri::State<'_, Arc<AppState>>,
+    max_cache_gb: u32,
+) -> Result<(), String> {
     let mut config_manager = state.config.write().await;
     let mut config = config_manager.get_config().clone();
     config.maxCacheGB = max_cache_gb;
-    config_manager.save_config(&config).map_err(|e| e.to_string())
+    config_manager
+        .save_config(&config)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn update_start_minimized(state: tauri::State<'_, Arc<AppState>>, start_minimized: bool) -> Result<(), String> {
+async fn update_start_minimized(
+    state: tauri::State<'_, Arc<AppState>>,
+    start_minimized: bool,
+) -> Result<(), String> {
     let mut config_manager = state.config.write().await;
     let mut config = config_manager.get_config().clone();
     config.startMinimized = start_minimized;
-    config_manager.save_config(&config).map_err(|e| e.to_string())
+    config_manager
+        .save_config(&config)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -90,7 +113,7 @@ async fn download_ytdlp(state: tauri::State<'_, Arc<AppState>>) -> Result<(), St
 async fn get_cache_usage(state: tauri::State<'_, Arc<AppState>>) -> Result<u64, String> {
     let config = state.config.read().await;
     let videos_dir = std::path::PathBuf::from(&config.get_config().videoFolder);
-    
+
     if !videos_dir.exists() {
         return Ok(0);
     }
@@ -105,7 +128,7 @@ async fn get_cache_usage(state: tauri::State<'_, Arc<AppState>>) -> Result<u64, 
             }
         }
     }
-    
+
     Ok(total_size)
 }
 
@@ -113,7 +136,7 @@ async fn get_cache_usage(state: tauri::State<'_, Arc<AppState>>) -> Result<u64, 
 async fn clear_cache(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
     let config = state.config.read().await;
     let videos_dir = std::path::PathBuf::from(&config.get_config().videoFolder);
-    
+
     if !videos_dir.exists() {
         return Ok(());
     }
@@ -127,8 +150,60 @@ async fn clear_cache(state: tauri::State<'_, Arc<AppState>>) -> Result<(), Strin
             }
         }
     }
-    
+
     Ok(())
+}
+
+#[tauri::command]
+async fn check_for_updates(app: AppHandle) -> Result<Option<String>, String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+
+    match updater.check().await {
+        Ok(Some(update)) => Ok(Some(update.version)),
+        Ok(None) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Result<(), String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+
+    if let Some(update) = updater.check().await.map_err(|e| e.to_string())? {
+        update.download_and_install(|_, _| {}, || {}).await.map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+/// 앱 시작 시 백그라운드에서 업데이트 체크
+async fn check_update_on_startup(app: AppHandle) {
+    // 앱 시작 후 3초 뒤에 업데이트 체크
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+    let updater = match app.updater() {
+        Ok(u) => u,
+        Err(e) => {
+            tracing::warn!("Failed to get updater: {}", e);
+            return;
+        }
+    };
+
+    match updater.check().await {
+        Ok(Some(update)) => {
+            tracing::info!("Update available: {}", update.version);
+            // 업데이트가 있으면 프론트엔드에 알림
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.emit("update-available", update.version);
+            }
+        }
+        Ok(None) => {
+            tracing::info!("No updates available");
+        }
+        Err(e) => {
+            tracing::warn!("Failed to check for updates: {}", e);
+        }
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -145,6 +220,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             get_config,
@@ -157,10 +233,12 @@ pub fn run() {
             download_ytdlp,
             get_cache_usage,
             clear_cache,
+            check_for_updates,
+            install_update,
         ])
         .setup(move |app| {
             let app_state = app_state_for_server.clone();
-            
+
             // 트레이 아이콘 메뉴 생성
             let show_item = MenuItem::with_id(app, "show", "Show Window", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -171,22 +249,25 @@ pub fn run() {
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
                 .tooltip("ivLyrics Helper")
-                .on_menu_event(|app, event| {
-                    match event.id.as_ref() {
-                        "show" => {
-                            if let Some(window) = app.get_webview_window("main") {
-                                let _ = window.show();
-                                let _ = window.set_focus();
-                            }
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
                         }
-                        "quit" => {
-                            app.exit(0);
-                        }
-                        _ => {}
                     }
+                    "quit" => {
+                        app.exit(0);
+                    }
+                    _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
                         let app = tray.app_handle();
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
@@ -202,7 +283,7 @@ pub fn run() {
                     let _ = window.hide();
                 }
             }
-            
+
             // API 서버를 별도 스레드에서 시작
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
@@ -214,7 +295,13 @@ pub fn run() {
                     }
                 });
             });
-            
+
+            // 백그라운드에서 업데이트 체크
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                check_update_on_startup(app_handle).await;
+            });
+
             Ok(())
         })
         .on_window_event(|window, event| {

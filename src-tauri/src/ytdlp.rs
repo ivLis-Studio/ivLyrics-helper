@@ -1,10 +1,10 @@
+use regex::Regex;
 use reqwest::Client;
 use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::broadcast;
-use regex::Regex;
 
 /// yt-dlp 다운로드 진행 상황
 #[derive(Clone, Debug, serde::Serialize)]
@@ -38,10 +38,11 @@ pub struct YtDlpManager {
 
 impl YtDlpManager {
     pub fn new(videos_dir: PathBuf) -> Self {
+        // macOS: ~/Library/Application Support, Windows: %LOCALAPPDATA%
         let data_dir = dirs::data_local_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("ivLyrics-helper");
-        
+
         Self {
             client: Client::new(),
             data_dir,
@@ -49,9 +50,29 @@ impl YtDlpManager {
         }
     }
 
-    /// yt-dlp 실행 파일 경로
+    /// yt-dlp 실행 파일 경로 (플랫폼별)
     pub fn ytdlp_path(&self) -> PathBuf {
-        self.data_dir.join("yt-dlp.exe")
+        if cfg!(target_os = "windows") {
+            self.data_dir.join("yt-dlp.exe")
+        } else {
+            // macOS, Linux
+            self.data_dir.join("yt-dlp")
+        }
+    }
+
+    /// 현재 플랫폼에 맞는 yt-dlp 바이너리 이름 반환
+    fn get_ytdlp_binary_name() -> &'static str {
+        if cfg!(target_os = "windows") {
+            "yt-dlp.exe"
+        } else if cfg!(target_os = "macos") {
+            if cfg!(target_arch = "aarch64") {
+                "yt-dlp_macos"  // ARM Mac (Apple Silicon)
+            } else {
+                "yt-dlp_macos"  // Intel Mac (same binary, universal)
+            }
+        } else {
+            "yt-dlp"  // Linux
+        }
     }
 
     /// 비디오 저장 디렉토리
@@ -81,7 +102,8 @@ impl YtDlpManager {
         tracing::info!("Downloading yt-dlp...");
 
         // GitHub API에서 최신 릴리즈 정보 가져오기
-        let release_info: serde_json::Value = self.client
+        let release_info: serde_json::Value = self
+            .client
             .get("https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest")
             .header("User-Agent", "ivLyrics-helper")
             .send()
@@ -89,21 +111,20 @@ impl YtDlpManager {
             .json()
             .await?;
 
-        // Windows 실행 파일 URL 찾기
-        let assets = release_info["assets"]
-            .as_array()
-            .ok_or("No assets found")?;
+        // 플랫폼에 맞는 실행 파일 URL 찾기
+        let assets = release_info["assets"].as_array().ok_or("No assets found")?;
+        let binary_name = Self::get_ytdlp_binary_name();
 
         let download_url = assets
             .iter()
             .find(|asset| {
                 asset["name"]
                     .as_str()
-                    .map(|n| n == "yt-dlp.exe")
+                    .map(|n| n == binary_name)
                     .unwrap_or(false)
             })
             .and_then(|asset| asset["browser_download_url"].as_str())
-            .ok_or("yt-dlp.exe not found in release")?;
+            .ok_or_else(|| format!("{} not found in release", binary_name))?;
 
         tracing::info!("Downloading from: {}", download_url);
 
@@ -113,6 +134,15 @@ impl YtDlpManager {
 
         // 파일 저장
         tokio::fs::write(&ytdlp_path, bytes).await?;
+
+        // macOS/Linux에서는 실행 권한 부여
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = tokio::fs::metadata(&ytdlp_path).await?.permissions();
+            perms.set_mode(0o755);
+            tokio::fs::set_permissions(&ytdlp_path, perms).await?;
+        }
 
         tracing::info!("yt-dlp downloaded successfully to {:?}", ytdlp_path);
 
@@ -185,18 +215,22 @@ impl YtDlpManager {
         let stdout_handle = tokio::spawn(async move {
             let reader = BufReader::new(stdout);
             let mut lines = reader.lines();
-            
+
             // 진행률 파싱용 정규식: [download] 12.3% of 100.00MiB at 5.00MiB/s ETA 00:15
             let progress_regex = Regex::new(
-                r"\[download\]\s+(\d+\.?\d*)%\s+of\s+[\d.]+\w*\s+at\s+([\d.]+\w*/s)\s+ETA\s+(\S+)"
-            ).ok();
+                r"\[download\]\s+(\d+\.?\d*)%\s+of\s+[\d.]+\w*\s+at\s+([\d.]+\w*/s)\s+ETA\s+(\S+)",
+            )
+            .ok();
 
             while let Ok(Some(line)) = lines.next_line().await {
                 tracing::debug!("yt-dlp stdout: {}", line);
 
                 if let Some(ref regex) = progress_regex {
                     if let Some(caps) = regex.captures(&line) {
-                        let percent: f32 = caps.get(1).and_then(|m| m.as_str().parse().ok()).unwrap_or(0.0);
+                        let percent: f32 = caps
+                            .get(1)
+                            .and_then(|m| m.as_str().parse().ok())
+                            .unwrap_or(0.0);
                         let speed = caps.get(2).map(|m| m.as_str().to_string());
                         let eta = caps.get(3).map(|m| m.as_str().to_string());
 
@@ -212,7 +246,10 @@ impl YtDlpManager {
                 }
 
                 // Merging 또는 post-processing 메시지 감지
-                if line.contains("[Merger]") || line.contains("[ExtractAudio]") || line.contains("Deleting") {
+                if line.contains("[Merger]")
+                    || line.contains("[ExtractAudio]")
+                    || line.contains("Deleting")
+                {
                     let _ = progress_tx_clone.send(DownloadProgress {
                         video_id: video_id_for_stdout.clone(),
                         status: DownloadStatus::Processing,
@@ -253,7 +290,7 @@ impl YtDlpManager {
 
         // 프로세스 종료 대기
         let status = child.wait().await?;
-        
+
         // stdout/stderr 핸들러 종료 대기
         let _ = stdout_handle.await;
         let _ = stderr_handle.await;
