@@ -38,6 +38,10 @@
     "windows": {
       "webviewInstallMode": {
         "type": "downloadBootstrapper"
+      },
+      "nsis": {
+        "languages": ["English", "Korean"],
+        "displayLanguageSelector": true
       }
     }
   },
