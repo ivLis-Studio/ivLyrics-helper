@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="ko">
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="stylesheet" href="styles.css" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ivLyrics Helper</title>
+  <script type="module" src="/main.js" defer></script>
+</head>
+
+<body>
+  <!-- Setup Wizard -->
+  <div id="setup-wizard" class="setup-wizard hidden">
+    <div class="setup-container">
+      <div class="setup-header">
+        <h1>ivLyrics Helper</h1>
+        <p class="setup-subtitle" data-i18n="setup.subtitle">Complete the initial setup before using.</p>
+      </div>
+
+      <!-- Language Selection -->
+      <div class="setup-step" id="step-language">
+        <h2 data-i18n="setup.language">Language</h2>
+        <div class="language-selector">
+          <button type="button" class="lang-btn" data-lang="en">English</button>
+          <button type="button" class="lang-btn" data-lang="ko">한국어</button>
+        </div>
+      </div>
+
+      <div class="setup-step" id="step-ytdlp">
+        <h2 data-i18n="setup.ytdlpDownload">yt-dlp Download</h2>
+        <p class="step-desc" data-i18n="setup.ytdlpDesc">Install yt-dlp required for YouTube video download.</p>
+        <div class="ytdlp-status">
+          <button type="button" id="download-ytdlp-btn" class="download-btn" data-i18n="setup.downloadBtn">Download
+            yt-dlp</button>
+          <div class="progress-container hidden" id="ytdlp-progress-container">
+            <div class="progress-bar">
+              <div class="progress-fill" id="ytdlp-progress"></div>
+            </div>
+            <p id="ytdlp-status-text" data-i18n="setup.waiting">Waiting...</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="setup-step" id="step-settings">
+        <h2 data-i18n="setup.storageSettings">Storage Settings</h2>
+
+        <div class="setting-item">
+          <label for="video-folder" data-i18n="settings.videoFolder">Video Save Folder</label>
+          <div class="folder-input">
+            <input type="text" id="video-folder" readonly />
+            <button type="button" id="browse-folder" data-i18n="settings.browse">Browse</button>
+          </div>
+        </div>
+
+        <div class="setting-item">
+          <label for="max-cache" data-i18n="settings.maxCache">Max Cache Size (GB)</label>
+          <input type="number" id="max-cache" min="1" max="100" value="10" />
+          <p class="setting-hint" data-i18n="settings.cacheHint">Old videos will be auto-deleted when cache exceeds
+            limit.</p>
+        </div>
+      </div>
+
+      <button type="button" id="setup-complete" class="setup-complete-btn" disabled data-i18n="setup.complete">
+        Complete Setup
+      </button>
+    </div>
+  </div>
+
+  <!-- Main App -->
+  <main id="main-app" class="container hidden">
+    <div class="header">
+      <h1>ivLyrics Helper</h1>
+    </div>
+
+    <div class="status-card">
+      <div class="status-indicator" id="status-indicator">
+        <span class="status-dot"></span>
+        <span class="status-text" data-i18n="status.checking">Checking server status...</span>
+      </div>
+      <p class="port-info"><span data-i18n="status.apiServer">API Server</span>: <code>http://localhost:15123</code></p>
+    </div>
+
+    <!-- Global Settings Section -->
+    <div class="service-section">
+      <div class="service-header" id="global-settings-toggle">
+        <span class="service-title" data-i18n="nav.settings">Settings</span>
+        <span class="toggle-icon" id="global-settings-icon">+</span>
+      </div>
+      <div class="service-content hidden" id="global-settings-content">
+        <div class="setting-item">
+          <label data-i18n="settings.language">Language</label>
+          <div class="language-selector compact">
+            <button type="button" class="lang-btn-small" data-lang="en">EN</button>
+            <button type="button" class="lang-btn-small" data-lang="ko">KO</button>
+          </div>
+        </div>
+
+        <div class="setting-item toggle-setting">
+          <label data-i18n="settings.startMinimized">Start minimized to tray</label>
+          <div class="toggle-switch" id="startup-tray-toggle">
+            <div class="toggle-knob"></div>
+          </div>
+        </div>
+        <p class="setting-hint" data-i18n="settings.startMinimizedHint">When enabled, the program starts without a
+          window, only in the tray.</p>
+      </div>
+    </div>
+
+    <!-- Video Background Service Section -->
+    <div class="service-section">
+      <div class="service-header" id="video-service-toggle">
+        <span class="service-title">Video Background Service</span>
+        <span class="toggle-icon" id="video-toggle-icon">+</span>
+      </div>
+      <div class="service-content hidden" id="video-service-content">
+        <!-- Endpoints -->
+        <div class="subsection">
+          <h3 class="subsection-title">API Endpoints</h3>
+
+          <div class="endpoint-card">
+            <div class="endpoint-header">
+              <span class="method get">GET</span>
+              <code>/video/request?id={youtubeId}</code>
+            </div>
+            <p class="endpoint-desc" data-i18n="api.videoRequest">Download YouTube video and return streaming URL</p>
+            <ul class="endpoint-details">
+              <li data-i18n="api.videoRequestDetail1">Returns URL immediately if file exists</li>
+              <li data-i18n="api.videoRequestDetail2">Streams download progress via SSE if not</li>
+              <li data-i18n="api.videoRequestDetail3">Auto-selects 1080p WebM (no audio)</li>
+            </ul>
+          </div>
+
+          <div class="endpoint-card">
+            <div class="endpoint-header">
+              <span class="method get">GET</span>
+              <code>/video/status?id={youtubeId}</code>
+            </div>
+            <p class="endpoint-desc" data-i18n="api.videoStatus">Check video download status</p>
+          </div>
+
+          <div class="endpoint-card">
+            <div class="endpoint-header">
+              <span class="method get">GET</span>
+              <code>/video/files/{filename}</code>
+            </div>
+            <p class="endpoint-desc" data-i18n="api.videoFiles">Serve downloaded video files</p>
+          </div>
+        </div>
+
+        <!-- Video Service Settings -->
+        <div class="subsection">
+          <h3 class="subsection-title" data-i18n="settings.storageSettings">Storage Settings</h3>
+
+          <div class="setting-item">
+            <label data-i18n="settings.videoFolder">Video Save Folder</label>
+            <div class="folder-input">
+              <input type="text" id="settings-video-folder" readonly />
+              <button type="button" id="settings-browse-folder" data-i18n="settings.change">Change</button>
+            </div>
+          </div>
+
+          <div class="setting-item">
+            <label data-i18n="settings.maxCache">Max Cache Size (GB)</label>
+            <div class="cache-input">
+              <input type="number" id="settings-max-cache" min="1" max="100" />
+              <button type="button" id="save-cache-setting" data-i18n="settings.save">Save</button>
+            </div>
+          </div>
+
+          <div class="setting-item">
+            <label data-i18n="settings.currentCache">Current Cache Usage</label>
+            <p id="current-cache-usage" data-i18n="settings.calculating">Calculating...</p>
+          </div>
+
+          <div class="setting-item">
+            <button type="button" id="clear-cache" class="danger-btn" data-i18n="settings.clearCache">Clear
+              Cache</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+</body>
+
+</html>
