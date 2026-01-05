@@ -1,7 +1,9 @@
+use crate::config::AppConfig;
 use regex::Regex;
 use reqwest::Client;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::time::SystemTime;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -329,6 +331,11 @@ impl YtDlpManager {
                     .and_then(|n| n.to_str())
                     .unwrap_or("");
 
+                // Cache pruning (best effort)
+                if let Err(e) = self.prune_cache_if_needed().await {
+                    tracing::warn!("Failed to prune cache: {}", e);
+                }
+
                 let _ = progress_tx.send(DownloadProgress {
                     video_id: video_id_owned,
                     status: DownloadStatus::Completed,
@@ -349,3 +356,53 @@ impl YtDlpManager {
         }
     }
 }
+
+    async fn prune_cache_if_needed(&self) -> Result<(), String> {
+        let max_bytes = self.max_cache_bytes().await;
+        if max_bytes == 0 {
+            return Ok(());
+        }
+
+        let mut entries = tokio::fs::read_dir(self.videos_dir()).await.map_err(|e| e.to_string())?;
+        let mut files: Vec<(PathBuf, SystemTime, u64)> = Vec::new();
+        let mut total: u64 = 0;
+
+        while let Some(entry) = entries.next_entry().await.map_err(|e| e.to_string())? {
+            let metadata = entry.metadata().await.map_err(|e| e.to_string())?;
+            if metadata.is_file() {
+                let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+                let size = metadata.len();
+                total = total.saturating_add(size);
+                files.push((entry.path(), modified, size));
+            }
+        }
+
+        if total <= max_bytes {
+            return Ok(());
+        }
+
+        // 오래된 파일부터 삭제
+        files.sort_by_key(|(_, modified, _)| *modified);
+        for (path, _, size) in files {
+            if total <= max_bytes {
+                break;
+            }
+            if tokio::fs::remove_file(&path).await.is_ok() {
+                total = total.saturating_sub(size);
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn max_cache_bytes(&self) -> u64 {
+        let config_path = self.data_dir.join("config.json");
+        if let Ok(content) = tokio::fs::read(&config_path).await {
+            if let Ok(cfg) = serde_json::from_slice::<AppConfig>(&content) {
+                return (cfg.maxCacheGB as u64) * 1024 * 1024 * 1024;
+            }
+        }
+
+        // 기본값 10GB
+        10 * 1024 * 1024 * 1024
+    }

@@ -3,14 +3,24 @@ mod video_server;
 mod ytdlp;
 mod autostart;
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+use reqwest::Client;
+use semver::Version;
+use serde::Deserialize;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager, AppHandle, Emitter,
 };
 use tauri_plugin_updater::UpdaterExt;
+use tokio::process::Command;
 use tokio::sync::RwLock;
+
+const GITHUB_OWNER: &str = "ivLis-Studio";
+const GITHUB_REPO: &str = "ivLyrics-helper";
+const UPDATER_USER_AGENT: &str = "ivLyrics-helper-updater";
 
 pub use config::{AppConfig, ConfigManager};
 pub use video_server::VideoServer;
@@ -172,24 +182,20 @@ async fn clear_cache(state: tauri::State<'_, Arc<AppState>>) -> Result<(), Strin
 
 #[tauri::command]
 async fn check_for_updates(app: AppHandle) -> Result<Option<String>, String> {
-    let updater = app.updater().map_err(|e| e.to_string())?;
-
-    match updater.check().await {
-        Ok(Some(update)) => Ok(Some(update.version)),
-        Ok(None) => Ok(None),
-        Err(e) => Err(e.to_string()),
-    }
+    find_available_update(&app).await
 }
 
 #[tauri::command]
 async fn install_update(app: AppHandle) -> Result<(), String> {
-    let updater = app.updater().map_err(|e| e.to_string())?;
-
-    if let Some(update) = updater.check().await.map_err(|e| e.to_string())? {
-        update.download_and_install(|_, _| {}, || {}).await.map_err(|e| e.to_string())?;
+    match try_tauri_update(&app).await {
+        Ok(updated) if updated => return Ok(()),
+        Ok(_) => return Ok(()),
+        Err(e) => {
+            tracing::warn!("Tauri updater failed, attempting GitHub fallback: {}", e);
+        }
     }
 
-    Ok(())
+    perform_github_update(&app).await.map(|_| ())
 }
 
 /// 앱 시작 시 백그라운드에서 업데이트 체크
@@ -197,20 +203,12 @@ async fn check_update_on_startup(app: AppHandle) {
     // 앱 시작 후 3초 뒤에 업데이트 체크
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
-    let updater = match app.updater() {
-        Ok(u) => u,
-        Err(e) => {
-            tracing::warn!("Failed to get updater: {}", e);
-            return;
-        }
-    };
-
-    match updater.check().await {
-        Ok(Some(update)) => {
-            tracing::info!("Update available: {}", update.version);
+    match find_available_update(&app).await {
+        Ok(Some(version)) => {
+            tracing::info!("Update available: {}", version);
             // 업데이트가 있으면 프론트엔드에 알림
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window.emit("update-available", update.version);
+                let _ = window.emit("update-available", version);
             }
         }
         Ok(None) => {
@@ -219,6 +217,243 @@ async fn check_update_on_startup(app: AppHandle) {
         Err(e) => {
             tracing::warn!("Failed to check for updates: {}", e);
         }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubRelease {
+    tag_name: String,
+    assets: Vec<GitHubAsset>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct GitHubAsset {
+    name: String,
+    browser_download_url: String,
+}
+
+#[derive(Debug, Clone)]
+struct ReleaseInfo {
+    version: String,
+    asset: GitHubAsset,
+}
+
+/// Tauri updater가 실패했을 때 GitHub API로 최신 버전을 확인
+async fn find_available_update(app: &AppHandle) -> Result<Option<String>, String> {
+    let current_version = app.package_info().version.to_string();
+
+    if let Ok(updater) = app.updater() {
+        match updater.check().await {
+            Ok(Some(update)) => return Ok(Some(update.version)),
+            Ok(None) => return Ok(None),
+            Err(e) => tracing::warn!("Tauri updater check failed: {}", e),
+        }
+    } else {
+        tracing::warn!("Tauri updater is not available");
+    }
+
+    match fetch_latest_release_info().await {
+        Ok(Some(release)) => {
+            if is_version_newer(&current_version, &release.version) {
+                Ok(Some(release.version))
+            } else {
+                Ok(None)
+            }
+        }
+        Ok(None) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// 내장 업데이트 설치 시도 (성공 여부 반환)
+async fn try_tauri_update(app: &AppHandle) -> Result<bool, String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+
+    match updater.check().await {
+        Ok(Some(update)) => {
+            update
+                .download_and_install(|_, _| {}, || {})
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(true)
+        }
+        Ok(None) => Ok(false),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// GitHub 릴리스에서 최신 인스톨러를 내려받아 실행
+async fn perform_github_update(app: &AppHandle) -> Result<bool, String> {
+    let current_version = app.package_info().version.to_string();
+    let Some(release) = fetch_latest_release_info().await? else {
+        return Ok(false);
+    };
+
+    if !is_version_newer(&current_version, &release.version) {
+        return Ok(false);
+    }
+
+    let installer_path = download_asset(&release.asset).await?;
+    tracing::info!("Downloaded fallback installer to {:?}", installer_path);
+    let install_result = install_downloaded(&installer_path).await;
+    let _ = tokio::fs::remove_file(&installer_path).await;
+    install_result.map(|_| true)
+}
+
+async fn fetch_latest_release_info() -> Result<Option<ReleaseInfo>, String> {
+    let client = Client::new();
+    let url = format!(
+        "https://api.github.com/repos/{}/{}/releases/latest",
+        GITHUB_OWNER, GITHUB_REPO
+    );
+
+    let response = client
+        .get(url)
+        .header("User-Agent", UPDATER_USER_AGENT)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "GitHub API responded with status {}",
+            response.status()
+        ));
+    }
+
+    let release: GitHubRelease = response.json().await.map_err(|e| e.to_string())?;
+    let version = normalize_version(&release.tag_name);
+    let asset = select_asset(&release.assets);
+
+    Ok(asset.map(|asset| ReleaseInfo { version, asset }))
+}
+
+fn normalize_version(tag: &str) -> String {
+    tag.trim_start_matches('v').to_string()
+}
+
+fn is_version_newer(current: &str, latest: &str) -> bool {
+    match (Version::parse(current), Version::parse(latest)) {
+        (Ok(current), Ok(latest)) => latest > current,
+        _ => latest != current,
+    }
+}
+
+fn select_asset(assets: &[GitHubAsset]) -> Option<GitHubAsset> {
+    #[cfg(target_os = "windows")]
+    let preferred = [".exe", ".msi"];
+    #[cfg(target_os = "macos")]
+    let preferred = [".dmg", ".app.tar.gz", ".zip"];
+    #[cfg(target_os = "linux")]
+    let preferred = [".AppImage", ".appimage", ".tar.gz"];
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    let preferred: [&str; 0] = [];
+
+    preferred
+        .iter()
+        .find_map(|ext| assets.iter().find(|asset| asset.name.ends_with(ext)).cloned())
+        .or_else(|| assets.first().cloned())
+}
+
+async fn download_asset(asset: &GitHubAsset) -> Result<PathBuf, String> {
+    let client = Client::new();
+    let response = client
+        .get(&asset.browser_download_url)
+        .header("User-Agent", UPDATER_USER_AGENT)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "Failed to download installer: {}",
+            response.status()
+        ));
+    }
+
+    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+    let mut path = std::env::temp_dir();
+    path.push(&asset.name);
+
+    tokio::fs::write(&path, bytes)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(path)
+}
+
+async fn install_downloaded(path: &Path) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let ext = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let path_str = path
+            .to_str()
+            .ok_or_else(|| "Invalid installer path".to_string())?;
+
+        let status = if ext == "msi" {
+            Command::new("msiexec")
+                .args(["/i", path_str, "/passive"])
+                .spawn()
+                .map_err(|e| e.to_string())?
+                .wait()
+                .await
+                .map_err(|e| e.to_string())?
+        } else {
+            Command::new(path)
+                .spawn()
+                .map_err(|e| e.to_string())?
+                .wait()
+                .await
+                .map_err(|e| e.to_string())?
+        };
+
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("Installer exited with status {}", status))
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let status = Command::new("open")
+            .arg(path)
+            .spawn()
+            .map_err(|e| e.to_string())?
+            .wait()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("Installer exited with status {}", status))
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let status = Command::new(path)
+            .spawn()
+            .map_err(|e| e.to_string())?
+            .wait()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("Installer exited with status {}", status))
+        }
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        Err("Unsupported platform for fallback update".to_string())
     }
 }
 

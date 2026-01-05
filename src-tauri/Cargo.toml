@@ -47,4 +47,4 @@ tracing-subscriber = "0.3"
 
 # Regex for parsing yt-dlp output
 regex = "1"
-
+semver = "1"

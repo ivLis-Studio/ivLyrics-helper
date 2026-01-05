@@ -2039,6 +2039,7 @@ dependencies = [
  "futures",
  "regex",
  "reqwest",
+ "semver",
  "serde",
  "serde_json",
  "tauri",
