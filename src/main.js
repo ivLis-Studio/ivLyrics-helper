@@ -30,8 +30,13 @@ const i18n = {
     'settings.calculating': 'Calculating...',
     'settings.clearCache': 'Clear Cache',
     'settings.language': 'Language',
+    'settings.startOnBoot': 'Launch on system startup',
+    'settings.startOnBootHint': 'Automatically start after signing in to Windows.',
     'settings.startMinimized': 'Start minimized to tray',
     'settings.startMinimizedHint': 'When enabled, the program starts without a window, only in the tray.',
+    'settings.saved': 'Settings saved',
+    'settings.saveFailed': 'Failed to save settings',
+    'settings.cacheCleared': 'Cache cleared',
     'settings.storageSettings': 'Storage Settings',
 
     'status.checking': 'Checking server status...',
@@ -76,8 +81,13 @@ const i18n = {
     'settings.calculating': '계산중...',
     'settings.clearCache': '캐시 비우기',
     'settings.language': '언어',
+    'settings.startOnBoot': '컴퓨터 시작 시 자동 실행',
+    'settings.startOnBootHint': 'Windows에 로그인하면 ivLyrics Helper가 자동으로 실행됩니다.',
     'settings.startMinimized': '시작 시 트레이 아이콘으로 실행',
     'settings.startMinimizedHint': '활성화하면 프로그램이 시작될 때 창 없이 트레이 아이콘으로만 실행됩니다.',
+    'settings.saved': '설정이 저장되었습니다',
+    'settings.saveFailed': '설정을 저장하지 못했습니다',
+    'settings.cacheCleared': '캐시를 비웠습니다',
     'settings.storageSettings': '저장 설정',
 
     'status.checking': '서버 상태 확인중...',
@@ -114,6 +124,22 @@ function applyTranslations() {
   });
 }
 
+function showSaveStatus(message, type = 'success') {
+  const statusEl = document.getElementById('save-status');
+  if (!statusEl) return;
+
+  statusEl.textContent = message;
+  statusEl.classList.remove('hidden', 'success', 'error');
+  statusEl.classList.add(type === 'error' ? 'error' : 'success');
+
+  if (saveStatusTimer) {
+    clearTimeout(saveStatusTimer);
+  }
+  saveStatusTimer = setTimeout(() => {
+    statusEl.classList.add('hidden');
+  }, 2000);
+}
+
 // 언어 변경
 async function setLanguage(lang, save = true) {
   currentLang = lang;
@@ -144,9 +170,11 @@ let appState = {
     videoFolder: '',
     maxCacheGB: 10,
     startMinimized: false,
+    startOnBoot: false,
     language: 'en'
   }
 };
+let saveStatusTimer = null;
 
 // 초기화
 document.addEventListener('DOMContentLoaded', async () => {
@@ -249,6 +277,7 @@ async function initSetupWizard() {
           videoFolder: appState.config.videoFolder,
           maxCacheGB: appState.config.maxCacheGB,
           startMinimized: false,
+          startOnBoot: false,
           language: appState.config.language
         }
       });
@@ -364,10 +393,14 @@ function initCollapsible(toggleId, contentId, iconId) {
 // 전역 설정 초기화
 async function initGlobalSettings() {
   const startupTrayToggle = document.getElementById('startup-tray-toggle');
+  const autostartToggle = document.getElementById('startup-autostart-toggle');
 
   // 현재 설정 로드
   if (appState.config.startMinimized) {
     startupTrayToggle.classList.add('active');
+  }
+  if (appState.config.startOnBoot) {
+    autostartToggle.classList.add('active');
   }
 
   // 토글 클릭 이벤트
@@ -376,10 +409,32 @@ async function initGlobalSettings() {
     appState.config.startMinimized = isActive;
 
     try {
-      await invoke('update_start_minimized', { startMinimized: isActive });
+      await invoke('update_start_minimized', {
+        start_minimized: isActive,
+        startMinimized: isActive
+      });
+      showSaveStatus(t('settings.saved'));
     } catch (error) {
       console.error('Failed to update start minimized setting:', error);
       startupTrayToggle.classList.toggle('active');
+      showSaveStatus(t('settings.saveFailed'), 'error');
+    }
+  });
+
+  autostartToggle.addEventListener('click', async () => {
+    const isActive = autostartToggle.classList.toggle('active');
+    appState.config.startOnBoot = isActive;
+
+    try {
+      await invoke('update_start_on_boot', {
+        start_on_boot: isActive,
+        startOnBoot: isActive
+      });
+      showSaveStatus(t('settings.saved'));
+    } catch (error) {
+      console.error('Failed to update start on boot setting:', error);
+      autostartToggle.classList.toggle('active');
+      showSaveStatus(t('settings.saveFailed'), 'error');
     }
   });
 
@@ -418,9 +473,11 @@ async function initVideoServiceSettings() {
         folderInput.value = selected;
         await invoke('update_video_folder', { folder: selected });
         appState.config.videoFolder = selected;
+        showSaveStatus(t('settings.saved'));
       }
     } catch (error) {
       console.error('Failed to update folder:', error);
+      showSaveStatus(t('settings.saveFailed'), 'error');
     }
   });
 
@@ -430,8 +487,10 @@ async function initVideoServiceSettings() {
       const maxCache = parseInt(cacheInput.value) || 10;
       await invoke('update_max_cache', { maxCacheGb: maxCache });
       appState.config.maxCacheGB = maxCache;
+      showSaveStatus(t('settings.saved'));
     } catch (error) {
       console.error('Failed to save cache setting:', error);
+      showSaveStatus(t('settings.saveFailed'), 'error');
     }
   });
 
@@ -441,8 +500,10 @@ async function initVideoServiceSettings() {
       try {
         await invoke('clear_cache');
         await updateCacheUsage();
+        showSaveStatus(t('settings.cacheCleared'));
       } catch (error) {
         console.error('Failed to clear cache:', error);
+        showSaveStatus(t('settings.saveFailed'), 'error');
       }
     }
   });

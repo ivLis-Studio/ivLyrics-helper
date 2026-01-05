@@ -72,6 +72,7 @@
     <div class="header">
       <h1>ivLyrics Helper</h1>
     </div>
+    <div id="save-status" class="save-toast hidden">Settings saved</div>
 
     <div class="status-card">
       <div class="status-indicator" id="status-indicator">
@@ -95,6 +96,15 @@
             <button type="button" class="lang-btn-small" data-lang="ko">KO</button>
           </div>
         </div>
+
+        <div class="setting-item toggle-setting">
+          <label data-i18n="settings.startOnBoot">Launch on system startup</label>
+          <div class="toggle-switch" id="startup-autostart-toggle">
+            <div class="toggle-knob"></div>
+          </div>
+        </div>
+        <p class="setting-hint" data-i18n="settings.startOnBootHint">Automatically start after signing in to
+          Windows.</p>
 
         <div class="setting-item toggle-setting">
           <label data-i18n="settings.startMinimized">Start minimized to tray</label>

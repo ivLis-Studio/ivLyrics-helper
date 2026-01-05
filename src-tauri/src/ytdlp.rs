@@ -2,9 +2,14 @@ use regex::Regex;
 use reqwest::Client;
 use std::path::PathBuf;
 use std::process::Stdio;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::broadcast;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// yt-dlp 다운로드 진행 상황
 #[derive(Clone, Debug, serde::Serialize)]
@@ -192,18 +197,25 @@ impl YtDlpManager {
         // yt-dlp 실행
         // -f: 1080p webm 비디오만, 오디오 없음. 없으면 차선책
         // --no-audio: 오디오 포함 안 함 (--no-audio 대신 format 선택으로 처리)
-        let mut child = Command::new(self.ytdlp_path())
-            .args([
-                "-f", "bestvideo[height<=1080][ext=webm]/bestvideo[height<=1080]/bestvideo[ext=webm]/bestvideo",
-                "--no-playlist",
-                "--progress",
-                "--newline",
-                "-o", output_template.to_str().unwrap(),
-                &url,
-            ])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
+        let mut cmd = Command::new(self.ytdlp_path());
+        cmd.args([
+            "-f", "bestvideo[height<=1080][ext=webm]/bestvideo[height<=1080]/bestvideo[ext=webm]/bestvideo",
+            "--no-playlist",
+            "--progress",
+            "--newline",
+            "-o", output_template.to_str().unwrap(),
+            &url,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+        #[cfg(windows)]
+        {
+            // Prevent opening a console window when running yt-dlp
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        let mut child = cmd.spawn()?;
 
         let stdout = child.stdout.take().ok_or("Failed to get stdout")?;
         let stderr = child.stderr.take().ok_or("Failed to get stderr")?;
@@ -312,13 +324,21 @@ impl YtDlpManager {
             }
 
             if let Some(path) = found_path {
+                let file_name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("");
+
                 let _ = progress_tx.send(DownloadProgress {
                     video_id: video_id_owned,
                     status: DownloadStatus::Completed,
                     percent: Some(100.0),
                     speed: None,
                     eta: None,
-                    message: Some("Download completed".to_string()),
+                    message: Some(format!(
+                        "http://localhost:15123/video/files/{}",
+                        file_name
+                    )),
                 });
                 Ok(path)
             } else {

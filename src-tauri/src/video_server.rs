@@ -9,8 +9,8 @@ use axum::{
     Router,
 };
 use futures::stream::Stream;
-use std::{convert::Infallible, net::SocketAddr, sync::Arc};
-use tokio::sync::broadcast;
+use std::{collections::HashMap, convert::Infallible, net::SocketAddr, sync::Arc};
+use tokio::sync::{broadcast, Mutex};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 use tower_http::cors::{Any, CorsLayer};
@@ -20,17 +20,19 @@ use crate::ytdlp::{DownloadProgress, DownloadStatus, YtDlpManager};
 
 /// 비디오 API 서버
 pub struct VideoServer {
-    ytdlp: YtDlpManager,
+    coordinator: DownloadCoordinator,
 }
 
 impl VideoServer {
     pub fn new(ytdlp: YtDlpManager) -> Self {
-        Self { ytdlp }
+        Self {
+            coordinator: DownloadCoordinator::new(ytdlp),
+        }
     }
 
     /// 서버 시작
     pub async fn start(self, port: u16) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let videos_dir = self.ytdlp.videos_dir();
+        let videos_dir = self.coordinator.ytdlp.videos_dir();
         
         // CORS 설정 (Spicetify에서 접근 가능하도록)
         let cors = CorsLayer::new()
@@ -38,7 +40,7 @@ impl VideoServer {
             .allow_methods(Any)
             .allow_headers(Any);
 
-        let ytdlp = Arc::new(self.ytdlp);
+        let coordinator = Arc::new(self.coordinator);
 
         let app = Router::new()
             .route("/video/request", get(handle_video_request))
@@ -47,7 +49,7 @@ impl VideoServer {
             // 정적 파일 서빙 (다운로드된 비디오)
             .nest_service("/video/files", ServeDir::new(videos_dir))
             .layer(cors)
-            .with_state(ytdlp);
+            .with_state(coordinator);
 
         let addr = SocketAddr::from(([127, 0, 0, 1], port));
         tracing::info!("Video server listening on http://{}", addr);
@@ -85,10 +87,11 @@ async fn health_check() -> &'static str {
 /// 이미 존재하면 즉시 URL 반환
 /// 없으면 다운로드 시작하고 SSE로 진행상황 스트리밍
 async fn handle_video_request(
-    State(ytdlp): State<Arc<YtDlpManager>>,
+    State(coordinator): State<Arc<DownloadCoordinator>>,
     Query(query): Query<VideoQuery>,
 ) -> Response {
     let video_id = query.id.trim();
+    let ytdlp = &coordinator.ytdlp;
 
     // 유효성 검사
     if video_id.is_empty() || video_id.len() > 20 {
@@ -123,41 +126,8 @@ async fn handle_video_request(
         .into_response();
     }
 
-    // SSE 스트림으로 다운로드 진행상황 전송
-    let (progress_tx, progress_rx) = broadcast::channel::<DownloadProgress>(100);
-    let video_id_owned = video_id.to_string();
-    let ytdlp_clone = ytdlp.clone();
-
-    // 다운로드 시작 (백그라운드)
-    tokio::spawn(async move {
-        match ytdlp_clone.download_video(&video_id_owned, progress_tx.clone()).await {
-            Ok(path) => {
-                let file_name = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("");
-                
-                let _ = progress_tx.send(DownloadProgress {
-                    video_id: video_id_owned,
-                    status: DownloadStatus::Completed,
-                    percent: Some(100.0),
-                    speed: None,
-                    eta: None,
-                    message: Some(format!("http://localhost:15123/video/files/{}", file_name)),
-                });
-            }
-            Err(e) => {
-                let _ = progress_tx.send(DownloadProgress {
-                    video_id: video_id_owned,
-                    status: DownloadStatus::Error,
-                    percent: None,
-                    speed: None,
-                    eta: None,
-                    message: Some(e.to_string()),
-                });
-            }
-        }
-    });
+    // 진행 중 다운로드가 있으면 합류, 없으면 새 다운로드 시작
+    let progress_rx = coordinator.start_or_subscribe(video_id).await;
 
     // SSE 스트림 생성
     let stream = create_progress_stream(progress_rx);
@@ -170,10 +140,11 @@ async fn handle_video_request(
 /// 비디오 상태 확인 엔드포인트 (SSE 없이 단순 조회)
 /// GET /video/status?id=<youtube_id>
 async fn handle_video_status(
-    State(ytdlp): State<Arc<YtDlpManager>>,
+    State(coordinator): State<Arc<DownloadCoordinator>>,
     Query(query): Query<VideoQuery>,
 ) -> axum::Json<VideoResponse> {
     let video_id = query.id.trim();
+    let ytdlp = &coordinator.ytdlp;
 
     if ytdlp.video_exists(video_id) {
         let video_path = ytdlp.video_path(video_id);
@@ -223,4 +194,61 @@ fn create_progress_stream(
             Err(_) => None,
         }
     })
+}
+
+/// 진행 중 다운로드를 공유하기 위한 코디네이터
+pub struct DownloadCoordinator {
+    ytdlp: YtDlpManager,
+    in_progress: Arc<Mutex<HashMap<String, broadcast::Sender<DownloadProgress>>>>,
+}
+
+impl DownloadCoordinator {
+    pub fn new(ytdlp: YtDlpManager) -> Self {
+        Self {
+            ytdlp,
+            in_progress: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// 이미 진행 중이면 기존 SSE 스트림에 합류하고, 아니면 새 다운로드를 시작
+    pub async fn start_or_subscribe(
+        &self,
+        video_id: &str,
+    ) -> broadcast::Receiver<DownloadProgress> {
+        // 이미 진행 중인 다운로드가 있으면 해당 채널에 합류
+        if let Some(sender) = self.in_progress.lock().await.get(video_id) {
+            return sender.subscribe();
+        }
+
+        // 새 다운로드 채널 생성
+        let (tx, rx) = broadcast::channel::<DownloadProgress>(100);
+        self.in_progress
+            .lock()
+            .await
+            .insert(video_id.to_string(), tx.clone());
+
+        // 다운로드 작업 시작
+        let video_id_owned = video_id.to_string();
+        let ytdlp = self.ytdlp.clone();
+        let in_progress = self.in_progress.clone();
+        tokio::spawn(async move {
+            let result = ytdlp.download_video(&video_id_owned, tx.clone()).await;
+
+            if let Err(e) = result {
+                let _ = tx.send(DownloadProgress {
+                    video_id: video_id_owned.clone(),
+                    status: DownloadStatus::Error,
+                    percent: None,
+                    speed: None,
+                    eta: None,
+                    message: Some(e.to_string()),
+                });
+            }
+
+            // 다운로드가 끝났으니 in-progress 목록에서 제거
+            in_progress.lock().await.remove(&video_id_owned);
+        });
+
+        rx
+    }
 }

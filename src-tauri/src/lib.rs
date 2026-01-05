@@ -1,6 +1,7 @@
 mod config;
 mod video_server;
 mod ytdlp;
+mod autostart;
 
 use std::sync::Arc;
 use tauri::{
@@ -94,6 +95,21 @@ async fn update_start_minimized(
     let mut config_manager = state.config.write().await;
     let mut config = config_manager.get_config().clone();
     config.startMinimized = start_minimized;
+    config_manager
+        .save_config(&config)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn update_start_on_boot(
+    state: tauri::State<'_, Arc<AppState>>,
+    start_on_boot: bool,
+) -> Result<(), String> {
+    autostart::set_autostart(start_on_boot).map_err(|e| e.to_string())?;
+
+    let mut config_manager = state.config.write().await;
+    let mut config = config_manager.get_config().clone();
+    config.startOnBoot = start_on_boot;
     config_manager
         .save_config(&config)
         .map_err(|e| e.to_string())
@@ -212,9 +228,13 @@ pub fn run() {
 
     let app_state = Arc::new(AppState::new());
     let app_state_for_server = app_state.clone();
-    let start_minimized = {
+    let (start_minimized, start_on_boot) = {
         let config = futures::executor::block_on(app_state.config.read());
-        config.get_config().startMinimized && config.get_config().setupComplete
+        let config = config.get_config();
+        (
+            config.startMinimized && config.setupComplete,
+            config.startOnBoot && config.setupComplete,
+        )
     };
 
     tauri::Builder::default()
@@ -229,6 +249,7 @@ pub fn run() {
             update_video_folder,
             update_max_cache,
             update_start_minimized,
+            update_start_on_boot,
             check_ytdlp_exists,
             download_ytdlp,
             get_cache_usage,
@@ -282,6 +303,11 @@ pub fn run() {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.hide();
                 }
+            }
+
+            // Ensure autostart entry matches config
+            if let Err(e) = autostart::set_autostart(start_on_boot) {
+                tracing::warn!("Failed to update autostart entry: {}", e);
             }
 
             // API 서버를 별도 스레드에서 시작

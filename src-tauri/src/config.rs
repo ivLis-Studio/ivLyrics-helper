@@ -13,6 +13,8 @@ pub struct AppConfig {
     pub maxCacheGB: u32,
     #[serde(default)]
     pub startMinimized: bool,
+    #[serde(default)]
+    pub startOnBoot: bool,
     #[serde(default = "default_language")]
     pub language: String,
 }
@@ -32,6 +34,7 @@ impl Default for AppConfig {
             videoFolder: String::new(),
             maxCacheGB: 10,
             startMinimized: false,
+            startOnBoot: false,
             language: "en".to_string(),
         }
     }

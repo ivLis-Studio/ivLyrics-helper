@@ -317,6 +317,24 @@ body {
   background-clip: text;
 }
 
+.save-toast {
+  background: var(--bg-card);
+  border-left: 4px solid var(--success);
+  padding: 0.7rem 1rem;
+  border-radius: var(--border-radius);
+  color: var(--text-primary);
+  margin-bottom: 1rem;
+  box-shadow: var(--shadow);
+}
+
+.save-toast.success {
+  border-color: var(--success);
+}
+
+.save-toast.error {
+  border-color: var(--error);
+}
+
 .status-card {
   background: var(--bg-card);
   border-radius: var(--border-radius);
