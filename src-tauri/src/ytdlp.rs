@@ -91,6 +91,266 @@ impl YtDlpManager {
         self.videos_dir().join(format!("{}.webm", video_id))
     }
 
+    /// 설치된 브라우저 감지 (Windows)
+    #[cfg(windows)]
+    fn detect_installed_browsers() -> Vec<&'static str> {
+        let mut installed = Vec::new();
+
+        // %LOCALAPPDATA% 환경 변수 가져오기
+        let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_default();
+
+        // 브라우저별 설치 경로 확인
+        // (browser_name, system_paths, user_local_path_suffix)
+        let browsers: &[(&str, &[&str], Option<&str>)] = &[
+            (
+                "chrome",
+                &[
+                    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+                ],
+                Some(r"Google\Chrome\Application\chrome.exe"),
+            ),
+            (
+                "edge",
+                &[
+                    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+                    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+                ],
+                None,
+            ),
+            (
+                "firefox",
+                &[
+                    r"C:\Program Files\Mozilla Firefox\firefox.exe",
+                    r"C:\Program Files (x86)\Mozilla Firefox\firefox.exe",
+                ],
+                None,
+            ),
+            (
+                "vivaldi",
+                &[r"C:\Program Files\Vivaldi\Application\vivaldi.exe"],
+                Some(r"Vivaldi\Application\vivaldi.exe"),
+            ),
+            (
+                "opera",
+                &[
+                    r"C:\Program Files\Opera\launcher.exe",
+                    r"C:\Program Files (x86)\Opera\launcher.exe",
+                ],
+                Some(r"Programs\Opera\launcher.exe"),
+            ),
+            (
+                "brave",
+                &[
+                    r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
+                    r"C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe",
+                ],
+                Some(r"BraveSoftware\Brave-Browser\Application\brave.exe"),
+            ),
+            (
+                "whale",
+                &[
+                    r"C:\Program Files\Naver\Naver Whale\Application\whale.exe",
+                    r"C:\Program Files (x86)\Naver\Naver Whale\Application\whale.exe",
+                ],
+                Some(r"Naver\Naver Whale\Application\whale.exe"),
+            ),
+        ];
+
+        for (browser_name, system_paths, user_local_suffix) in browsers {
+            let mut found = false;
+
+            // 시스템 경로 확인 (Program Files)
+            for path in *system_paths {
+                if std::path::Path::new(path).exists() {
+                    found = true;
+                    break;
+                }
+            }
+
+            // 시스템 경로에 없으면 사용자 로컬 경로 확인 (%LOCALAPPDATA%)
+            if !found {
+                if let Some(suffix) = user_local_suffix {
+                    if !local_app_data.is_empty() {
+                        let user_path = format!("{}\\{}", local_app_data, suffix);
+                        if std::path::Path::new(&user_path).exists() {
+                            found = true;
+                            tracing::debug!(
+                                "Found {} at user-local path: {}",
+                                browser_name,
+                                user_path
+                            );
+                        }
+                    }
+                }
+            }
+
+            if found {
+                installed.push(*browser_name);
+            }
+        }
+
+        // 우선순위에 따라 정렬 (Firefox 우선 - Chrome/Edge는 Windows에서 DPAPI 문제가 있음)
+        // Firefox → Whale → Chrome → Edge → Vivaldi → Opera → Brave
+        let priority_order = [
+            "firefox", "whale", "chrome", "edge", "vivaldi", "opera", "brave",
+        ];
+        installed.sort_by_key(|browser| {
+            priority_order
+                .iter()
+                .position(|b| b == browser)
+                .unwrap_or(999)
+        });
+
+        tracing::info!("Detected installed browsers (Windows): {:?}", installed);
+        installed
+    }
+
+    /// 설치된 브라우저 감지 (macOS)
+    #[cfg(target_os = "macos")]
+    fn detect_installed_browsers() -> Vec<&'static str> {
+        let mut installed = Vec::new();
+
+        // 각 브라우저의 설치 경로를 확인
+        let browser_paths: &[(&str, &[&str])] = &[
+            (
+                "chrome",
+                &[
+                    "/Applications/Google Chrome.app",
+                    "~/Applications/Google Chrome.app",
+                ],
+            ),
+            (
+                "edge",
+                &[
+                    "/Applications/Microsoft Edge.app",
+                    "~/Applications/Microsoft Edge.app",
+                ],
+            ),
+            (
+                "firefox",
+                &["/Applications/Firefox.app", "~/Applications/Firefox.app"],
+            ),
+            (
+                "vivaldi",
+                &["/Applications/Vivaldi.app", "~/Applications/Vivaldi.app"],
+            ),
+            (
+                "opera",
+                &["/Applications/Opera.app", "~/Applications/Opera.app"],
+            ),
+            (
+                "brave",
+                &[
+                    "/Applications/Brave Browser.app",
+                    "~/Applications/Brave Browser.app",
+                ],
+            ),
+            (
+                "whale",
+                &["/Applications/Whale.app", "~/Applications/Whale.app"],
+            ),
+            ("safari", &["/Applications/Safari.app"]),
+        ];
+
+        for (browser_name, paths) in browser_paths {
+            for path in *paths {
+                let expanded_path = if path.starts_with("~/") {
+                    if let Some(home) = dirs::home_dir() {
+                        home.join(&path[2..])
+                    } else {
+                        PathBuf::from(path)
+                    }
+                } else {
+                    PathBuf::from(path)
+                };
+
+                if expanded_path.exists() {
+                    installed.push(*browser_name);
+                    break;
+                }
+            }
+        }
+
+        // 우선순위에 따라 정렬
+        let priority_order = [
+            "chrome", "edge", "firefox", "vivaldi", "opera", "brave", "whale", "safari",
+        ];
+        installed.sort_by_key(|browser| {
+            priority_order
+                .iter()
+                .position(|b| b == browser)
+                .unwrap_or(999)
+        });
+
+        tracing::info!("Detected installed browsers: {:?}", installed);
+        installed
+    }
+
+    /// 설치된 브라우저 감지 (Linux)
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    fn detect_installed_browsers() -> Vec<&'static str> {
+        use std::process::Command as StdCommand;
+
+        let mut installed = Vec::new();
+
+        // which 명령어로 브라우저 실행 파일 확인
+        let browser_commands: &[(&str, &[&str])] = &[
+            (
+                "chrome",
+                &["google-chrome", "google-chrome-stable", "chrome"],
+            ),
+            ("chromium", &["chromium", "chromium-browser"]),
+            ("edge", &["microsoft-edge", "microsoft-edge-stable"]),
+            ("firefox", &["firefox"]),
+            ("vivaldi", &["vivaldi", "vivaldi-stable"]),
+            ("opera", &["opera"]),
+            ("brave", &["brave", "brave-browser"]),
+        ];
+
+        for (browser_name, commands) in browser_commands {
+            for cmd in *commands {
+                let output = StdCommand::new("which").arg(cmd).output();
+                if let Ok(out) = output {
+                    if out.status.success() {
+                        installed.push(*browser_name);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // 우선순위에 따라 정렬
+        let priority_order = [
+            "chrome", "edge", "firefox", "vivaldi", "opera", "brave", "chromium",
+        ];
+        installed.sort_by_key(|browser| {
+            priority_order
+                .iter()
+                .position(|b| b == browser)
+                .unwrap_or(999)
+        });
+
+        tracing::info!("Detected installed browsers: {:?}", installed);
+        installed
+    }
+
+    /// 에러 메시지가 성인인증 관련인지 확인
+    fn is_age_restriction_error(error_msg: &str) -> bool {
+        error_msg.contains("Sign in to confirm your age")
+            || error_msg.contains("age-restricted")
+            || error_msg.contains("confirm your age")
+            || error_msg.contains("inappropriate for some users")
+            || error_msg.contains("--cookies-from-browser")
+    }
+
+    /// 에러 메시지가 DPAPI 복호화 실패인지 확인 (Windows Chrome/Edge 쿠키 문제)
+    fn is_dpapi_error(error_msg: &str) -> bool {
+        error_msg.contains("Failed to decrypt with DPAPI")
+            || error_msg.contains("failed to decrypt")
+            || error_msg.contains("DPAPI")
+    }
+
     /// yt-dlp가 존재하는지 확인하고, 없으면 다운로드
     pub async fn ensure_ytdlp(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // 디렉토리 생성
@@ -182,37 +442,213 @@ impl YtDlpManager {
             return Ok(video_path);
         }
 
+        // 쿠키 없이 먼저 시도
+        let result = self
+            .try_download_video(video_id, &progress_tx, None, None)
+            .await;
+
+        match result {
+            Ok(path) => Ok(path),
+            Err(e) => {
+                let error_msg = e.to_string();
+
+                // 성인인증 에러인 경우 쿠키로 재시도
+                if Self::is_age_restriction_error(&error_msg) {
+                    tracing::info!("Age restriction detected, attempting to use cookies...");
+
+                    // 1. 먼저 cookies.txt 파일로 시도 (설정에서 지정한 경우)
+                    let cookies_file = self.get_cookies_file_path().await;
+                    if let Some(ref cookies_path) = cookies_file {
+                        if std::path::Path::new(cookies_path).exists() {
+                            tracing::info!("Trying with cookies.txt file: {}", cookies_path);
+
+                            let _ = progress_tx.send(DownloadProgress {
+                                video_id: video_id_owned.clone(),
+                                status: DownloadStatus::Checking,
+                                percent: Some(0.0),
+                                speed: None,
+                                eta: None,
+                                message: Some("Trying with cookies.txt file...".to_string()),
+                            });
+
+                            match self
+                                .try_download_video(
+                                    video_id,
+                                    &progress_tx,
+                                    None,
+                                    Some(cookies_path.as_str()),
+                                )
+                                .await
+                            {
+                                Ok(path) => {
+                                    tracing::info!("Successfully downloaded with cookies.txt");
+                                    return Ok(path);
+                                }
+                                Err(cookies_err) => {
+                                    tracing::warn!("Failed with cookies.txt: {}", cookies_err);
+                                }
+                            }
+                        }
+                    }
+
+                    // 2. 브라우저 쿠키로 시도
+                    let installed_browsers = Self::detect_installed_browsers();
+
+                    if installed_browsers.is_empty() && cookies_file.is_none() {
+                        tracing::warn!("No supported browsers or cookies.txt found");
+                        let _ = progress_tx.send(DownloadProgress {
+                            video_id: video_id_owned.clone(),
+                            status: DownloadStatus::Error,
+                            percent: None,
+                            speed: None,
+                            eta: None,
+                            message: Some("Age-restricted video. No cookies.txt or supported browsers found. Please set a cookies.txt file in Settings.".to_string()),
+                        });
+                        return Err(e);
+                    }
+
+                    // 각 브라우저로 순차적으로 시도
+                    for browser in installed_browsers {
+                        tracing::info!("Trying with browser cookies: {}", browser);
+
+                        let _ = progress_tx.send(DownloadProgress {
+                            video_id: video_id_owned.clone(),
+                            status: DownloadStatus::Checking,
+                            percent: Some(0.0),
+                            speed: None,
+                            eta: None,
+                            message: Some(format!("Trying with {} cookies...", browser)),
+                        });
+
+                        match self
+                            .try_download_video(video_id, &progress_tx, Some(browser), None)
+                            .await
+                        {
+                            Ok(path) => {
+                                tracing::info!("Successfully downloaded with {} cookies", browser);
+                                return Ok(path);
+                            }
+                            Err(browser_err) => {
+                                let err_msg = browser_err.to_string();
+                                if Self::is_dpapi_error(&err_msg)
+                                    || Self::is_cookie_db_error(&err_msg)
+                                {
+                                    tracing::warn!("Cookie extraction failed for {} (Chromium security). Trying next browser...", browser);
+                                } else {
+                                    tracing::warn!(
+                                        "Failed with {} cookies: {}",
+                                        browser,
+                                        browser_err
+                                    );
+                                }
+                                // 다음 브라우저로 계속 시도
+                            }
+                        }
+                    }
+
+                    // 모든 시도 실패
+                    let _ = progress_tx.send(DownloadProgress {
+                        video_id: video_id_owned.clone(),
+                        status: DownloadStatus::Error,
+                        percent: None,
+                        speed: None,
+                        eta: None,
+                        message: Some("Age-restricted video. Please set a valid cookies.txt file in Settings. See the help (?) for instructions.".to_string()),
+                    });
+                    Err(
+                        "Failed to download age-restricted video. Please configure cookies.txt file."
+                            .into(),
+                    )
+                } else {
+                    Err(e)
+                }
+            }
+        }
+    }
+
+    /// cookies.txt 파일 경로 가져오기 (설정에서)
+    async fn get_cookies_file_path(&self) -> Option<String> {
+        let config_path = self.data_dir.join("config.json");
+        if let Ok(content) = tokio::fs::read(&config_path).await {
+            if let Ok(cfg) = serde_json::from_slice::<crate::config::AppConfig>(&content) {
+                if !cfg.cookiesFile.is_empty() {
+                    return Some(cfg.cookiesFile);
+                }
+            }
+        }
+        None
+    }
+
+    /// 에러 메시지가 쿠키 데이터베이스 복사 실패인지 확인
+    fn is_cookie_db_error(error_msg: &str) -> bool {
+        error_msg.contains("Could not copy Chrome cookie database")
+            || error_msg.contains("could not copy")
+            || error_msg.contains("cookie database")
+    }
+
+    /// 비디오 다운로드 시도 (브라우저 쿠키 또는 cookies.txt 파일 옵션 포함)
+    async fn try_download_video(
+        &self,
+        video_id: &str,
+        progress_tx: &broadcast::Sender<DownloadProgress>,
+        browser: Option<&str>,
+        cookies_file: Option<&str>,
+    ) -> Result<PathBuf, Box<dyn std::error::Error + Send + Sync>> {
+        let video_id_owned = video_id.to_string();
+
         // 다운로드 상태 전송
+        let checking_msg = if cookies_file.is_some() {
+            "Checking video with cookies.txt...".to_string()
+        } else if let Some(b) = browser {
+            format!("Checking video with {} cookies...", b)
+        } else {
+            "Checking video availability...".to_string()
+        };
+
         let _ = progress_tx.send(DownloadProgress {
             video_id: video_id_owned.clone(),
             status: DownloadStatus::Checking,
             percent: Some(0.0),
             speed: None,
             eta: None,
-            message: Some("Checking video availability...".to_string()),
+            message: Some(checking_msg),
         });
 
         let url = format!("https://www.youtube.com/watch?v={}", video_id);
         let output_template = self.videos_dir().join("%(id)s.%(ext)s");
 
-        // yt-dlp 실행
-        // -f: 1080p webm 비디오만, 오디오 없음. 없으면 차선책
-        // --no-audio: 오디오 포함 안 함 (--no-audio 대신 format 선택으로 처리)
+        // yt-dlp 명령 구성
         let mut cmd = Command::new(self.ytdlp_path());
-        cmd.args([
-            "-f", "bestvideo[height<=1080][ext=webm]/bestvideo[height<=1080]/bestvideo[ext=webm]/bestvideo",
-            "--no-playlist",
-            "--progress",
-            "--newline",
-            "-o", output_template.to_str().unwrap(),
-            &url,
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+
+        let mut args = vec![
+            "-f".to_string(), 
+            "bestvideo[height<=1080][ext=webm]/bestvideo[height<=1080]/bestvideo[ext=webm]/bestvideo".to_string(),
+            "--no-playlist".to_string(),
+            "--progress".to_string(),
+            "--newline".to_string(),
+        ];
+
+        // cookies.txt 파일 옵션 (우선)
+        if let Some(cookies_path) = cookies_file {
+            args.push("--cookies".to_string());
+            args.push(cookies_path.to_string());
+        }
+        // 브라우저 쿠키 옵션
+        else if let Some(browser_name) = browser {
+            args.push("--cookies-from-browser".to_string());
+            args.push(browser_name.to_string());
+        }
+
+        args.push("-o".to_string());
+        args.push(output_template.to_str().unwrap().to_string());
+        args.push(url.clone());
+
+        cmd.args(&args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
 
         #[cfg(windows)]
         {
-            // Prevent opening a console window when running yt-dlp
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
 
@@ -229,7 +665,6 @@ impl YtDlpManager {
             let reader = BufReader::new(stdout);
             let mut lines = reader.lines();
 
-            // 진행률 파싱용 정규식: [download] 12.3% of 100.00MiB at 5.00MiB/s ETA 00:15
             let progress_regex = Regex::new(
                 r"\[download\]\s+(\d+\.?\d*)%\s+of\s+[\d.]+\w*\s+at\s+([\d.]+\w*/s)\s+ETA\s+(\S+)",
             )
@@ -258,7 +693,6 @@ impl YtDlpManager {
                     }
                 }
 
-                // Merging 또는 post-processing 메시지 감지
                 if line.contains("[Merger]")
                     || line.contains("[ExtractAudio]")
                     || line.contains("Deleting")
@@ -276,40 +710,33 @@ impl YtDlpManager {
         });
 
         let video_id_for_stderr = video_id_owned.clone();
-        let progress_tx_for_stderr = progress_tx.clone();
 
-        // stderr도 읽기
-        let stderr_handle = tokio::spawn(async move {
+        // stderr 캡처 (에러 확인용)
+        let stderr_content = tokio::spawn(async move {
             let reader = BufReader::new(stderr);
             let mut lines = reader.lines();
-            let mut last_error = String::new();
+            let mut all_stderr = Vec::new();
 
             while let Ok(Some(line)) = lines.next_line().await {
                 tracing::warn!("yt-dlp stderr: {}", line);
-                last_error = line;
+                all_stderr.push(line);
             }
 
-            if !last_error.is_empty() {
-                let _ = progress_tx_for_stderr.send(DownloadProgress {
-                    video_id: video_id_for_stderr.clone(),
-                    status: DownloadStatus::Error,
-                    percent: None,
-                    speed: None,
-                    eta: None,
-                    message: Some(last_error),
-                });
-            }
+            (video_id_for_stderr, all_stderr)
         });
 
         // 프로세스 종료 대기
         let status = child.wait().await?;
 
-        // stdout/stderr 핸들러 종료 대기
+        // stdout 핸들러 종료 대기
         let _ = stdout_handle.await;
-        let _ = stderr_handle.await;
+
+        // stderr 내용 가져오기
+        let (_, stderr_lines) = stderr_content.await?;
+        let combined_stderr = stderr_lines.join("\n");
 
         if status.success() {
-            // 다운로드된 파일 찾기 (확장자가 다를 수 있음)
+            // 다운로드된 파일 찾기
             let videos_dir = self.videos_dir();
             let mut found_path = None;
 
@@ -345,7 +772,23 @@ impl YtDlpManager {
                 Err("Downloaded file not found".into())
             }
         } else {
-            Err(format!("yt-dlp exited with status: {}", status).into())
+            // 에러 발생 시 stderr 내용을 에러로 반환
+            let error_msg = if !combined_stderr.is_empty() {
+                format!("ERROR: {}", combined_stderr)
+            } else {
+                format!("yt-dlp exited with status: {}", status)
+            };
+
+            let _ = progress_tx.send(DownloadProgress {
+                video_id: video_id_owned.clone(),
+                status: DownloadStatus::Error,
+                percent: None,
+                speed: None,
+                eta: None,
+                message: Some(error_msg.clone()),
+            });
+
+            Err(error_msg.into())
         }
     }
 

@@ -187,6 +187,35 @@
             <button type="button" id="clear-cache" class="danger-btn" data-i18n="settings.clearCache">Clear
               Cache</button>
           </div>
+
+          <!-- Cookies.txt Settings for Age-Restricted Videos -->
+          <h3 class="subsection-title" style="margin-top: 1.5rem;" data-i18n="settings.ageRestricted">Age-Restricted
+            Videos</h3>
+          <p class="setting-hint" style="margin-bottom: 1rem;" data-i18n="settings.ageRestrictedHint">
+            Some YouTube videos require login. Export cookies.txt from your browser to enable downloading these videos.
+          </p>
+
+          <div class="setting-item">
+            <label data-i18n="settings.cookiesFile">Cookies File (cookies.txt)</label>
+            <div class="cookies-input">
+              <span id="cookies-status-text" class="cookies-status not-registered">Not registered</span>
+              <button type="button" id="settings-browse-cookies" data-i18n="settings.register">Register</button>
+              <button type="button" id="settings-clear-cookies" class="danger-btn-small hidden" title="Clear">✕</button>
+            </div>
+          </div>
+
+          <div class="setting-item">
+            <a href="https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc"
+              target="_blank" class="help-link" data-i18n="settings.cookiesHelp">
+              📦 Get cookies.txt LOCALLY (Chrome Extension)
+            </a>
+            <p class="setting-hint" data-i18n="settings.cookiesHelpHint">
+              1. Install the extension above<br>
+              2. Log in to YouTube in your browser<br>
+              3. Click the extension icon and export cookies as .txt<br>
+              4. Select the exported file here
+            </p>
+          </div>
         </div>
       </div>
     </div>

@@ -17,6 +17,9 @@ pub struct AppConfig {
     pub startOnBoot: bool,
     #[serde(default = "default_language")]
     pub language: String,
+    /// cookies.txt 파일 경로 (YouTube 성인인증 영상에 필요)
+    #[serde(default)]
+    pub cookiesFile: String,
 }
 
 fn default_max_cache() -> u32 {
@@ -36,6 +39,7 @@ impl Default for AppConfig {
             startMinimized: false,
             startOnBoot: false,
             language: "en".to_string(),
+            cookiesFile: String::new(),
         }
     }
 }

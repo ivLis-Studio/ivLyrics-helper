@@ -1,7 +1,7 @@
+mod autostart;
 mod config;
 mod video_server;
 mod ytdlp;
-mod autostart;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -12,7 +12,7 @@ use serde::Deserialize;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, AppHandle, Emitter,
+    AppHandle, Emitter, Manager,
 };
 use tauri_plugin_updater::UpdaterExt;
 use tokio::process::Command;
@@ -128,6 +128,80 @@ async fn update_start_on_boot(
 #[tauri::command]
 async fn check_ytdlp_exists(state: tauri::State<'_, Arc<AppState>>) -> Result<bool, String> {
     Ok(state.ytdlp.ytdlp_path().exists())
+}
+
+/// 쿠키 파일을 앱 데이터 폴더에 youtube_cookie.txt로 복사
+#[tauri::command]
+async fn update_cookies_file(
+    state: tauri::State<'_, Arc<AppState>>,
+    cookies_file: String,
+) -> Result<(), String> {
+    // 원본 파일 읽기
+    let content = tokio::fs::read(&cookies_file)
+        .await
+        .map_err(|e| format!("Failed to read cookies file: {}", e))?;
+
+    // 앱 데이터 폴더에 저장
+    let data_dir = dirs::data_local_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("ivLyrics-helper");
+
+    // 디렉토리 생성
+    tokio::fs::create_dir_all(&data_dir)
+        .await
+        .map_err(|e| format!("Failed to create data directory: {}", e))?;
+
+    let target_path = data_dir.join("youtube_cookie.txt");
+
+    // 파일 복사
+    tokio::fs::write(&target_path, content)
+        .await
+        .map_err(|e| format!("Failed to save cookies file: {}", e))?;
+
+    tracing::info!("Cookies file saved to {:?}", target_path);
+
+    // config에는 파일이 등록되었음을 표시 (고정 경로 사용)
+    let mut config_manager = state.config.write().await;
+    let mut config = config_manager.get_config().clone();
+    config.cookiesFile = target_path.to_string_lossy().to_string();
+    config_manager
+        .save_config(&config)
+        .map_err(|e| e.to_string())
+}
+
+/// 쿠키 파일이 등록되어 있는지 확인
+#[tauri::command]
+async fn has_cookies_file() -> Result<bool, String> {
+    let data_dir = dirs::data_local_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("ivLyrics-helper");
+    let cookie_path = data_dir.join("youtube_cookie.txt");
+    Ok(cookie_path.exists())
+}
+
+/// 등록된 쿠키 파일 삭제
+#[tauri::command]
+async fn clear_cookies_file(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    let data_dir = dirs::data_local_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("ivLyrics-helper");
+    let cookie_path = data_dir.join("youtube_cookie.txt");
+
+    // 파일 삭제
+    if cookie_path.exists() {
+        tokio::fs::remove_file(&cookie_path)
+            .await
+            .map_err(|e| format!("Failed to delete cookies file: {}", e))?;
+        tracing::info!("Cookies file deleted");
+    }
+
+    // config 업데이트
+    let mut config_manager = state.config.write().await;
+    let mut config = config_manager.get_config().clone();
+    config.cookiesFile = String::new();
+    config_manager
+        .save_config(&config)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -351,7 +425,12 @@ fn select_asset(assets: &[GitHubAsset]) -> Option<GitHubAsset> {
 
     preferred
         .iter()
-        .find_map(|ext| assets.iter().find(|asset| asset.name.ends_with(ext)).cloned())
+        .find_map(|ext| {
+            assets
+                .iter()
+                .find(|asset| asset.name.ends_with(ext))
+                .cloned()
+        })
         .or_else(|| assets.first().cloned())
 }
 
@@ -486,6 +565,9 @@ pub fn run() {
             update_start_minimized,
             update_start_on_boot,
             check_ytdlp_exists,
+            update_cookies_file,
+            has_cookies_file,
+            clear_cookies_file,
             download_ytdlp,
             get_cache_usage,
             clear_cache,

@@ -38,6 +38,15 @@ const i18n = {
     'settings.saveFailed': 'Failed to save settings',
     'settings.cacheCleared': 'Cache cleared',
     'settings.storageSettings': 'Storage Settings',
+    'settings.ageRestricted': 'Age-Restricted Videos',
+    'settings.ageRestrictedHint': 'Some YouTube videos require login. Export cookies.txt from your browser to enable downloading these videos.',
+    'settings.cookiesFile': 'Cookies File (cookies.txt)',
+    'settings.cookiesHelp': '📦 Get cookies.txt LOCALLY (Chrome Extension)',
+    'settings.cookiesHelpHint': '1. Install the extension above\n2. Log in to YouTube in your browser\n3. Click the extension icon and export cookies as .txt\n4. Select the exported file here',
+    'settings.cookiesCleared': 'Cookies file setting cleared',
+    'settings.cookiesRegistered': 'Registered',
+    'settings.cookiesNotRegistered': 'Not registered',
+    'settings.register': 'Register',
 
     'status.checking': 'Checking server status...',
     'status.online': 'Server running',
@@ -89,6 +98,15 @@ const i18n = {
     'settings.saveFailed': '설정을 저장하지 못했습니다',
     'settings.cacheCleared': '캐시를 비웠습니다',
     'settings.storageSettings': '저장 설정',
+    'settings.ageRestricted': '성인 인증 영상',
+    'settings.ageRestrictedHint': '일부 YouTube 영상은 로그인이 필요합니다. 브라우저에서 cookies.txt를 추출하면 이러한 영상도 다운로드할 수 있습니다.',
+    'settings.cookiesFile': '쿠키 파일 (cookies.txt)',
+    'settings.cookiesHelp': '📦 Get cookies.txt LOCALLY (크롬 확장 프로그램)',
+    'settings.cookiesHelpHint': '1. 위 확장 프로그램을 설치하세요\n2. 브라우저에서 YouTube에 로그인하세요\n3. 확장 프로그램 아이콘을 클릭하고 쿠키를 .txt로 내보내기\n4. 여기서 내보내기한 파일을 선택하세요',
+    'settings.cookiesCleared': '쿠키 파일 설정이 삭제되었습니다',
+    'settings.cookiesRegistered': '등록됨',
+    'settings.cookiesNotRegistered': '등록 안 됨',
+    'settings.register': '등록',
 
     'status.checking': '서버 상태 확인중...',
     'status.online': '서버 실행중',
@@ -171,7 +189,8 @@ let appState = {
     maxCacheGB: 10,
     startMinimized: false,
     startOnBoot: false,
-    language: 'en'
+    language: 'en',
+    cookiesFile: ''
   }
 };
 let saveStatusTimer = null;
@@ -507,6 +526,73 @@ async function initVideoServiceSettings() {
       }
     }
   });
+
+  // Cookies.txt 파일 설정
+  const cookiesStatusText = document.getElementById('cookies-status-text');
+  const browseCookiesBtn = document.getElementById('settings-browse-cookies');
+  const clearCookiesBtn = document.getElementById('settings-clear-cookies');
+
+  // 쿠키 등록 상태 업데이트 함수
+  async function updateCookiesStatus() {
+    try {
+      const hasFile = await invoke('has_cookies_file');
+      if (hasFile) {
+        cookiesStatusText.textContent = t('settings.cookiesRegistered');
+        cookiesStatusText.className = 'cookies-status registered';
+        clearCookiesBtn.classList.remove('hidden');
+      } else {
+        cookiesStatusText.textContent = t('settings.cookiesNotRegistered');
+        cookiesStatusText.className = 'cookies-status not-registered';
+        clearCookiesBtn.classList.add('hidden');
+      }
+    } catch (error) {
+      console.error('Failed to check cookies status:', error);
+      cookiesStatusText.textContent = t('settings.cookiesNotRegistered');
+      cookiesStatusText.className = 'cookies-status not-registered';
+      clearCookiesBtn.classList.add('hidden');
+    }
+  }
+
+  if (cookiesStatusText && browseCookiesBtn) {
+    // 초기 상태 로드
+    await updateCookiesStatus();
+
+    // 쿠키 파일 선택 및 등록
+    browseCookiesBtn.addEventListener('click', async () => {
+      try {
+        const selected = await open({
+          multiple: false,
+          filters: [{
+            name: 'Cookies',
+            extensions: ['txt']
+          }],
+          title: t('settings.cookiesFile')
+        });
+        if (selected) {
+          await invoke('update_cookies_file', { cookiesFile: selected });
+          await updateCookiesStatus();
+          showSaveStatus(t('settings.saved'));
+        }
+      } catch (error) {
+        console.error('Failed to set cookies file:', error);
+        showSaveStatus(t('settings.saveFailed'), 'error');
+      }
+    });
+
+    // 쿠키 파일 설정 삭제
+    if (clearCookiesBtn) {
+      clearCookiesBtn.addEventListener('click', async () => {
+        try {
+          await invoke('clear_cookies_file');
+          await updateCookiesStatus();
+          showSaveStatus(t('settings.cookiesCleared'));
+        } catch (error) {
+          console.error('Failed to clear cookies file:', error);
+          showSaveStatus(t('settings.saveFailed'), 'error');
+        }
+      });
+    }
+  }
 }
 
 // 캐시 사용량 업데이트
