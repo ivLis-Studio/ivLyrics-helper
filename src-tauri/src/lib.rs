@@ -1,11 +1,14 @@
 mod autostart;
 mod config;
+mod lyrics_server;
 mod video_server;
 mod ytdlp;
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+use lyrics_server::LyricsData;
+use lyrics_server::ProgressData;
 use reqwest::Client;
 use semver::Version;
 use serde::Deserialize;
@@ -23,6 +26,7 @@ const GITHUB_REPO: &str = "ivLyrics-helper";
 const UPDATER_USER_AGENT: &str = "ivLyrics-helper-updater";
 
 pub use config::{AppConfig, ConfigManager};
+pub use lyrics_server::LyricsServer;
 pub use video_server::VideoServer;
 pub use ytdlp::YtDlpManager;
 
@@ -30,16 +34,22 @@ pub use ytdlp::YtDlpManager;
 pub struct AppState {
     pub ytdlp: YtDlpManager,
     pub config: Arc<RwLock<ConfigManager>>,
+    pub lyrics: Arc<Mutex<Option<LyricsData>>>,
+    pub progress: Arc<Mutex<Option<ProgressData>>>,
 }
 
 impl AppState {
     pub fn new() -> Self {
         let config_manager = ConfigManager::new();
         let ytdlp = YtDlpManager::new(config_manager.get_video_folder());
+        let lyrics = Arc::new(Mutex::new(None));
+        let progress = Arc::new(Mutex::new(None));
 
         Self {
             ytdlp,
             config: Arc::new(RwLock::new(config_manager)),
+            lyrics,
+            progress,
         }
     }
 }
@@ -631,10 +641,31 @@ pub fn run() {
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
                 rt.block_on(async {
-                    // 비디오 API 서버 시작
-                    let server = VideoServer::new(app_state.ytdlp.clone());
-                    if let Err(e) = server.start(15123).await {
-                        tracing::error!("Failed to start video server: {}", e);
+                    // 비디오, 가사 API 시작 및 병합
+                    let video_router = VideoServer::new(app_state.ytdlp.clone()).get_router();
+                    let lyrics_router =
+                        LyricsServer::new(app_state.progress.clone(), app_state.lyrics.clone())
+                            .get_router();
+
+                    let app = axum::Router::new()
+                        .merge(video_router)
+                        .merge(lyrics_router)
+                        .layer(
+                            tower_http::cors::CorsLayer::new()
+                                .allow_origin(tower_http::cors::Any)
+                                .allow_methods(tower_http::cors::Any)
+                                .allow_headers(tower_http::cors::Any),
+                        );
+
+                    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 15123));
+                    tracing::info!("Server listening on http://{}", addr);
+
+                    if let Ok(listener) = tokio::net::TcpListener::bind(addr).await {
+                        if let Err(e) = axum::serve(listener, app).await {
+                            tracing::error!("Server error: {}", e);
+                        }
+                    } else {
+                        tracing::error!("Failed to bind port 15123");
                     }
                 });
             });

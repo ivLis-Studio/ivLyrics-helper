@@ -9,11 +9,10 @@ use axum::{
     Router,
 };
 use futures::stream::Stream;
-use std::{collections::HashMap, convert::Infallible, net::SocketAddr, sync::Arc};
+use std::{collections::HashMap, convert::Infallible, sync::Arc};
 use tokio::sync::{broadcast, Mutex};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
-use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
 
 use crate::ytdlp::{DownloadProgress, DownloadStatus, YtDlpManager};
@@ -30,34 +29,19 @@ impl VideoServer {
         }
     }
 
-    /// 서버 시작
-    pub async fn start(self, port: u16) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    /// Router 반환
+    pub fn get_router(self) -> Router {
         let videos_dir = self.coordinator.ytdlp.videos_dir();
-        
-        // CORS 설정 (Spicetify에서 접근 가능하도록)
-        let cors = CorsLayer::new()
-            .allow_origin(Any)
-            .allow_methods(Any)
-            .allow_headers(Any);
 
         let coordinator = Arc::new(self.coordinator);
 
-        let app = Router::new()
+        Router::new()
             .route("/video/request", get(handle_video_request))
             .route("/video/status", get(handle_video_status))
             .route("/health", get(health_check))
             // 정적 파일 서빙 (다운로드된 비디오)
             .nest_service("/video/files", ServeDir::new(videos_dir))
-            .layer(cors)
-            .with_state(coordinator);
-
-        let addr = SocketAddr::from(([127, 0, 0, 1], port));
-        tracing::info!("Video server listening on http://{}", addr);
-
-        let listener = tokio::net::TcpListener::bind(addr).await?;
-        axum::serve(listener, app).await?;
-
-        Ok(())
+            .with_state(coordinator)
     }
 }
 
@@ -83,7 +67,7 @@ async fn health_check() -> &'static str {
 
 /// 비디오 다운로드 및 URL 반환 엔드포인트
 /// GET /video/request?id=<youtube_id>
-/// 
+///
 /// 이미 존재하면 즉시 URL 반환
 /// 없으면 다운로드 시작하고 SSE로 진행상황 스트리밍
 async fn handle_video_request(
@@ -177,22 +161,22 @@ fn create_progress_stream(
 ) -> impl Stream<Item = Result<Event, Infallible>> {
     let stream = BroadcastStream::new(rx);
 
-    stream.filter_map(|result| {
-        match result {
-            Ok(progress) => {
-                let is_final = progress.status == DownloadStatus::Completed 
-                    || progress.status == DownloadStatus::Error
-                    || progress.status == DownloadStatus::AlreadyExists;
+    stream.filter_map(|result| match result {
+        Ok(progress) => {
+            let is_final = progress.status == DownloadStatus::Completed
+                || progress.status == DownloadStatus::Error
+                || progress.status == DownloadStatus::AlreadyExists;
 
-                let event_data = serde_json::to_string(&progress).unwrap_or_default();
-                let event = Event::default()
-                    .data(event_data)
-                    .event(if is_final { "complete" } else { "progress" });
+            let event_data = serde_json::to_string(&progress).unwrap_or_default();
+            let event = Event::default().data(event_data).event(if is_final {
+                "complete"
+            } else {
+                "progress"
+            });
 
-                Some(Ok(event))
-            }
-            Err(_) => None,
+            Some(Ok(event))
         }
+        Err(_) => None,
     })
 }
 
