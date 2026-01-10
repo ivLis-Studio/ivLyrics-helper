@@ -76,9 +76,10 @@ impl LyricsServer {
         let coordinator = Arc::new(self.coordinator);
 
         Router::new()
-            .route("/progress", post(handle_progress).get(handle_get_progress))
-            .route("/lyrics", post(handle_lyrics).get(handle_get_lyrics))
-            .route("/lyrics/now", get(handle_get_now))
+            .route("/lyrics/sender", post(handle_lyrics))      // 가사 수신
+            .route("/lyrics/progress", post(handle_progress).get(handle_get_progress)) // 재생 진행 상태
+            .route("/lyrics/getfull", get(handle_get_lyrics))  // 전체 가사 반환
+            .route("/lyrics/getnow", get(handle_get_now))      // 현재 가사 반환
             .route("/lyrics/health", get(health_check))
             .with_state(coordinator)
     }
@@ -129,13 +130,6 @@ async fn handle_get_progress(
     Json(progress_data)
 }
 
-static mut current_lyric: LyricLine = LyricLine {
-    start_time: 0,
-    end_time: None,
-    text: String::new(),
-    pron_text: None,
-    trans_text: None,
-};
 async fn handle_get_now(
     State(coordinator): State<Arc<LyricsCoordinator>>,
 ) -> Json<Option<LyricLine>> {
@@ -150,26 +144,34 @@ async fn handle_get_now(
         None
     };
 
-    if let Some(lyrics_data) = lyrics_data {
-        if let Some(progress_data) = progress_data {
-            let current_time = progress_data.position as i64;
+    let Some(lyrics_data) = lyrics_data else {
+        return Json(None);
+    };
+    let Some(progress_data) = progress_data else {
+        return Json(None);
+    };
 
-            for lyric in lyrics_data.lyrics.iter() {
-                let start_time = lyric.start_time as i64;
-                let end_time = lyric.end_time.unwrap_or(lyric.start_time) as i64;
-                if start_time <= current_time && current_time <= end_time {
-                    unsafe {
-                        current_lyric = lyric.clone();
-                    }
-                    break;
-                }
-                if start_time > current_time {
-                    break;
-                }
-            }
+    let current_time = progress_data.position as i64;
+    let mut current_lyric: Option<LyricLine> = None;
+
+    for lyric in lyrics_data.lyrics.iter() {
+        let start_time = lyric.start_time;
+        let end_time = lyric.end_time.unwrap_or(start_time);
+
+        // 현재 시간에 해당하는 가사 찾기
+        if start_time <= current_time && current_time <= end_time {
+            current_lyric = Some(lyric.clone());
+            break;
         }
+        // 아직 시작 안된 가사면 이전 가사 유지
+        if start_time > current_time {
+            break;
+        }
+        // 지나간 가사는 저장 (다음 가사까지의 공백 처리)
+        current_lyric = Some(lyric.clone());
     }
-    unsafe { Json(Some(current_lyric.clone())) }
+
+    Json(current_lyric)
 }
 
 pub struct LyricsCoordinator {

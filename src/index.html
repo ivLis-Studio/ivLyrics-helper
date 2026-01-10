@@ -231,24 +231,32 @@
           <h3 class="subsection-title">API Endpoints</h3>
           <div class="endpoint-card">
             <div class="endpoint-header">
-              <span class="method get">GET</span>
-              <code>/progress</code>
+              <span class="method post">POST</span>
+              <code>/lyrics/sender</code>
             </div>
-            <p class="endpoint-desc" data-i18n="api.progressRequest">Returns progress of play info</p>
+            <p class="endpoint-desc" data-i18n="api.lyricsSender">Receives lyrics data from Spotify</p>
           </div>
           <div class="endpoint-card">
             <div class="endpoint-header">
               <span class="method get">GET</span>
-              <code>/lyrics</code>
+              <span class="method post">POST</span>
+              <code>/lyrics/progress</code>
             </div>
-            <p class="endpoint-desc" data-i18n="api.lyricsRequest">Returns lyrics of playing track.</p>
+            <p class="endpoint-desc" data-i18n="api.progressRequest">Returns/receives playback progress</p>
           </div>
           <div class="endpoint-card">
             <div class="endpoint-header">
               <span class="method get">GET</span>
-              <code>/lyrics/now</code>
+              <code>/lyrics/getfull</code>
             </div>
-            <p class="endpoint-desc" data-i18n="api.nowLyricsRequest">Returns lyric of current position.</p>
+            <p class="endpoint-desc" data-i18n="api.lyricsRequest">Returns full lyrics of playing track</p>
+          </div>
+          <div class="endpoint-card">
+            <div class="endpoint-header">
+              <span class="method get">GET</span>
+              <code>/lyrics/getnow</code>
+            </div>
+            <p class="endpoint-desc" data-i18n="api.nowLyricsRequest">Returns current lyric at playback position</p>
           </div>
         </div>
       </div>
