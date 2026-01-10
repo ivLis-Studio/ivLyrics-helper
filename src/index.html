@@ -219,7 +219,41 @@
         </div>
       </div>
     </div>
-  </main>
+    <!-- Lyrics Service Section -->
+    <div class="service-section">
+      <div class="service-header" id="lyrics-service-toggle">
+        <span class="service-title">Lyrics Service</span>
+        <span class="toggle-icon" id="lyrics-toggle-icon">+</span>
+      </div>
+      <div class="service-content hidden" id="lyrics-service-content">
+        <!-- Endpoints-->
+        <div class="subsection">
+          <h3 class="subsection-title">API Endpoints</h3>
+          <div class="endpoint-card">
+            <div class="endpoint-header">
+              <span class="method get">GET</span>
+              <code>/progress</code>
+            </div>
+            <p class="endpoint-desc" data-i18n="api.progressRequest">Returns progress of play info</p>
+          </div>
+          <div class="endpoint-card">
+            <div class="endpoint-header">
+              <span class="method get">GET</span>
+              <code>/lyrics</code>
+            </div>
+            <p class="endpoint-desc" data-i18n="api.lyricsRequest">Returns lyrics of playing track.</p>
+          </div>
+          <div class="endpoint-card">
+            <div class="endpoint-header">
+              <span class="method get">GET</span>
+              <code>/lyrics/now</code>
+            </div>
+            <p class="endpoint-desc" data-i18n="api.nowLyricsRequest">Returns lyric of current position.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    </div>
 </body>
 
 </html>

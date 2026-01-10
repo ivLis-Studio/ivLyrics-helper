@@ -62,6 +62,10 @@ const i18n = {
     'api.videoStatus': 'Check video download status',
     'api.videoFiles': 'Serve downloaded video files',
 
+    'api.progressRequest': 'Returns playback progress',
+    'api.lyricsRequest': 'Returns fulllyrics',
+    'api.nowLyricsRequest': 'Returns current lyrics',
+
     'confirm.clearCache': 'Delete all cached videos?',
     'unknown': 'Unknown'
   },
@@ -121,6 +125,10 @@ const i18n = {
     'api.videoRequestDetail3': '1080p WebM (무음) 자동 선택',
     'api.videoStatus': '영상 다운로드 상태 확인',
     'api.videoFiles': '다운로드된 영상 파일 서빙',
+
+    'api.progressRequest': '재생 진행 상태 반환',
+    'api.lyricsRequest': '전체 가사 반환',
+    'api.nowLyricsRequest': '현재 가사 반환',
 
     'confirm.clearCache': '모든 캐시된 영상을 삭제하시겠습니까?',
     'unknown': '알 수 없음'
@@ -394,6 +402,9 @@ function initCollapsibleSections() {
 
   // Video Service Section
   initCollapsible('video-service-toggle', 'video-service-content', 'video-toggle-icon');
+
+  // Lyrics Service Section
+  initCollapsible('lyrics-service-toggle', 'lyrics-service-content', 'lyrics-toggle-icon');
 }
 
 function initCollapsible(toggleId, contentId, iconId) {
