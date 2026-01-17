@@ -351,6 +351,49 @@ impl YtDlpManager {
             || error_msg.contains("DPAPI")
     }
 
+    /// Deno 런타임 설치 (Windows)
+    #[cfg(windows)]
+    async fn ensure_deno(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let deno_path = self.data_dir.join("deno.exe");
+        if deno_path.exists() {
+            return Ok(());
+        }
+
+        tracing::info!("Downloading Deno runtime...");
+        let url = "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip";
+
+        let response = self
+            .client
+            .get(url)
+            .header("User-Agent", "ivLyrics-helper")
+            .send()
+            .await?;
+
+        let bytes = response.bytes().await?;
+        let data_dir = self.data_dir.clone();
+
+        // Blocking 작업 (압축 해제)
+        tokio::task::spawn_blocking(
+            move || -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+                use std::io::Cursor;
+
+                let reader = Cursor::new(bytes);
+                let mut archive = zip::ZipArchive::new(reader)?;
+
+                // deno.exe 추출
+                let mut file = archive.by_name("deno.exe")?;
+                let mut out_file = std::fs::File::create(data_dir.join("deno.exe"))?;
+                std::io::copy(&mut file, &mut out_file)?;
+
+                Ok(())
+            },
+        )
+        .await??;
+
+        tracing::info!("Deno downloaded successfully to {:?}", deno_path);
+        Ok(())
+    }
+
     /// yt-dlp가 존재하는지 확인하고, 없으면 다운로드
     pub async fn ensure_ytdlp(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // 디렉토리 생성
@@ -358,6 +401,13 @@ impl YtDlpManager {
         tokio::fs::create_dir_all(self.videos_dir()).await?;
 
         let ytdlp_path = self.ytdlp_path();
+
+        #[cfg(windows)]
+        {
+            if let Err(e) = self.ensure_deno().await {
+                tracing::warn!("Failed to ensure Deno: {}", e);
+            }
+        }
 
         if ytdlp_path.exists() {
             tracing::info!("yt-dlp already exists at {:?}", ytdlp_path);
@@ -626,9 +676,6 @@ impl YtDlpManager {
             "--no-playlist".to_string(),
             "--progress".to_string(),
             "--newline".to_string(),
-            // Fix JavaScript runtime issue by using web player client
-            "--extractor-args".to_string(),
-            "youtube:player_client=web".to_string(),
             // Restrict filenames to avoid Windows invalid character issues
             "--restrict-filenames".to_string(),
         ];
