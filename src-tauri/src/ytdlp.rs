@@ -626,6 +626,11 @@ impl YtDlpManager {
             "--no-playlist".to_string(),
             "--progress".to_string(),
             "--newline".to_string(),
+            // Fix JavaScript runtime issue by using web player client
+            "--extractor-args".to_string(),
+            "youtube:player_client=web".to_string(),
+            // Restrict filenames to avoid Windows invalid character issues
+            "--restrict-filenames".to_string(),
         ];
 
         // cookies.txt 파일 옵션 (우선)
