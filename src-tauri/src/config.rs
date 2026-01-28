@@ -20,6 +20,9 @@ pub struct AppConfig {
     /// cookies.txt 파일 경로 (YouTube 성인인증 영상에 필요)
     #[serde(default)]
     pub cookiesFile: String,
+    /// 비디오 화질 설정 (2160p, 1440p, 1080p, 720p, 480p)
+    #[serde(default = "default_video_quality")]
+    pub videoQuality: String,
 }
 
 fn default_max_cache() -> u32 {
@@ -28,6 +31,11 @@ fn default_max_cache() -> u32 {
 
 fn default_language() -> String {
     "en".to_string()
+}
+
+//  기본 화질 함수 추가
+fn default_video_quality() -> String {
+    "1080p".to_string()
 }
 
 impl Default for AppConfig {
@@ -40,6 +48,7 @@ impl Default for AppConfig {
             startOnBoot: false,
             language: "en".to_string(),
             cookiesFile: String::new(),
+            videoQuality: "1080p".to_string(), //  기본값 추가
         }
     }
 }
@@ -102,6 +111,15 @@ impl ConfigManager {
             .unwrap_or_else(|| PathBuf::from("."))
             .join("ivLyrics-helper")
             .join("videos")
+    }
+
+    // 비디오 화질 가져오기 메서드 추가
+    pub fn get_video_quality(&self) -> String {
+        if self.config.videoQuality.is_empty() {
+            "1080p".to_string()
+        } else {
+            self.config.videoQuality.clone()
+        }
     }
 
     pub fn save_config(&mut self, config: &AppConfig) -> Result<(), Box<dyn std::error::Error>> {

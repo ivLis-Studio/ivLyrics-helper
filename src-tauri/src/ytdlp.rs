@@ -667,12 +667,16 @@ impl YtDlpManager {
         let url = format!("https://www.youtube.com/watch?v={}", video_id);
         let output_template = self.videos_dir().join("%(id)s.%(ext)s");
 
+        // 설정에서 화질 가져오기
+        let video_quality = self.get_video_quality().await;
+        let format_string = self.get_format_string(&video_quality);
+
         // yt-dlp 명령 구성
         let mut cmd = Command::new(self.ytdlp_path());
 
         let mut args = vec![
-            "-f".to_string(), 
-            "bestvideo[height<=1080][ext=webm]/bestvideo[height<=1080]/bestvideo[ext=webm]/bestvideo".to_string(),
+            "-f".to_string(),
+            format_string,  // 동적으로 생성된 포맷 문자열 사용
             "--no-playlist".to_string(),
             "--progress".to_string(),
             "--newline".to_string(),
@@ -894,5 +898,44 @@ impl YtDlpManager {
 
         // 기본값 10GB
         10 * 1024 * 1024 * 1024
+    }
+    // 설정에서 화질 가져오기
+    async fn get_video_quality(&self) -> String {
+        let config_path = self.data_dir.join("config.json");
+        if let Ok(content) = tokio::fs::read(&config_path).await {
+            if let Ok(cfg) = serde_json::from_slice::<AppConfig>(&content) {
+                if !cfg.videoQuality.is_empty() {
+                    return cfg.videoQuality;
+                }
+            }
+        }
+
+        // 기본값 1080p
+        "1080p".to_string()
+    }
+
+    // 화질에 따른 포맷 문자열 생성
+fn get_format_string(&self, quality: &str) -> String {
+    match quality {
+        "2160p" => {
+            // 4K: 단일 스트림 우선 (병합 불필요)
+            "bestvideo[height<=2160][ext=webm]/bestvideo[height<=2160]/best[height<=2160]/best"
+        }
+        "1440p" => {
+            "bestvideo[height<=1440][ext=webm]/bestvideo[height<=1440]/best[height<=1440]/best"
+        }
+        "1080p" => {
+            "bestvideo[height<=1080][ext=webm]/bestvideo[height<=1080]/best[height<=1080]/best"
+        }
+        "720p" => {
+            "bestvideo[height<=720][ext=webm]/bestvideo[height<=720]/best[height<=720]/best"
+        }
+        "480p" => {
+            "bestvideo[height<=480][ext=webm]/bestvideo[height<=480]/best[height<=480]/best"
+        }
+        _ => {
+            "bestvideo[height<=1080][ext=webm]/bestvideo[height<=1080]/best[height<=1080]/best"
+        }
+        }.to_string()
     }
 }

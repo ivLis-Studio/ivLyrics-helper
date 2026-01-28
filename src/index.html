@@ -171,6 +171,18 @@
           </div>
 
           <div class="setting-item">
+            <label data-i18n="settings.videoQuality">Video Quality</label>
+            <select id="video-quality-select" class="quality-select">
+              <option value="2160p">4K (2160p)</option>
+              <option value="1440p">QHD (1440p)</option>
+              <option value="1080p" selected>Full HD (1080p)</option>
+              <option value="720p">HD (720p)</option>
+              <option value="480p">SD (480p)</option>
+            </select>
+            <p class="setting-hint" data-i18n="settings.videoQualityHint">Select preferred quality for downloads</p>
+          </div>
+
+          <div class="setting-item">
             <label data-i18n="settings.maxCache">Max Cache Size (GB)</label>
             <div class="cache-input">
               <input type="number" id="settings-max-cache" min="1" max="100" />
