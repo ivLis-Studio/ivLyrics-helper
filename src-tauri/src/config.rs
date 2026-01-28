@@ -20,7 +20,7 @@ pub struct AppConfig {
     /// cookies.txt 파일 경로 (YouTube 성인인증 영상에 필요)
     #[serde(default)]
     pub cookiesFile: String,
-    /// ✅ 비디오 화질 설정 (2160p, 1440p, 1080p, 720p, 480p)
+    /// 비디오 화질 설정 (2160p, 1440p, 1080p, 720p, 480p)
     #[serde(default = "default_video_quality")]
     pub videoQuality: String,
 }

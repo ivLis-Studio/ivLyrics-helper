@@ -667,7 +667,7 @@ impl YtDlpManager {
         let url = format!("https://www.youtube.com/watch?v={}", video_id);
         let output_template = self.videos_dir().join("%(id)s.%(ext)s");
 
-        // ✅ 설정에서 화질 가져오기
+        // 설정에서 화질 가져오기
         let video_quality = self.get_video_quality().await;
         let format_string = self.get_format_string(&video_quality);
 
