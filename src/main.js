@@ -68,7 +68,10 @@ const i18n = {
     'api.nowLyricsRequest': 'Returns current lyric at playback position',
 
     'confirm.clearCache': 'Delete all cached videos?',
-    'unknown': 'Unknown'
+    'unknown': 'Unknown',
+
+    'settings.videoQuality': 'Video Quality',
+    'settings.videoQualityHint': 'Select preferred quality for downloads',
   },
   ko: {
     'setup.subtitle': '처음 사용하기 전 기본 설정을 완료해주세요.',
@@ -133,7 +136,10 @@ const i18n = {
     'api.nowLyricsRequest': '현재 재생 위치의 가사 반환',
 
     'confirm.clearCache': '모든 캐시된 영상을 삭제하시겠습니까?',
-    'unknown': '알 수 없음'
+    'unknown': '알 수 없음',
+
+    'settings.videoQuality': '영상 화질',
+    'settings.videoQualityHint': '다운로드할 영상의 화질을 선택하세요'
   }
 };
 
@@ -200,7 +206,8 @@ let appState = {
     startMinimized: false,
     startOnBoot: false,
     language: 'en',
-    cookiesFile: ''
+    cookiesFile: '',
+    videoQuality: '1080p'
   }
 };
 let saveStatusTimer = null;
@@ -486,9 +493,16 @@ async function initVideoServiceSettings() {
   const saveCacheBtn = document.getElementById('save-cache-setting');
   const clearCacheBtn = document.getElementById('clear-cache');
 
+  const qualitySelect = document.getElementById('video-quality-select');
+
   // 현재 설정 표시
   folderInput.value = appState.config.videoFolder || '';
   cacheInput.value = appState.config.maxCacheGB || 10;
+
+  //  화질 설정 로드
+  if (qualitySelect) {
+    qualitySelect.value = appState.config.videoQuality || '1080p';
+  }
 
   // 캐시 사용량 로드
   await updateCacheUsage();
@@ -525,6 +539,21 @@ async function initVideoServiceSettings() {
       showSaveStatus(t('settings.saveFailed'), 'error');
     }
   });
+
+  // 화질 변경 이벤트 추가
+  if (qualitySelect) {
+    qualitySelect.addEventListener('change', async () => {
+      try {
+        const quality = qualitySelect.value;
+        await invoke('update_video_quality', { quality: quality });
+        appState.config.videoQuality = quality;
+        showSaveStatus(t('settings.saved'));
+      } catch (error) {
+        console.error('Failed to save video quality:', error);
+        showSaveStatus(t('settings.saveFailed'), 'error');
+      }
+    });
+  }
 
   // 캐시 비우기
   clearCacheBtn.addEventListener('click', async () => {

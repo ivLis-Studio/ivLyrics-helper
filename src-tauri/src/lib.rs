@@ -108,6 +108,19 @@ async fn update_max_cache(
 }
 
 #[tauri::command]
+async fn update_video_quality(
+    state: tauri::State<'_, Arc<AppState>>,
+    quality: String,
+) -> Result<(), String> {
+    let mut config_manager = state.config.write().await;
+    let mut config = config_manager.get_config().clone();
+    config.videoQuality = quality;
+    config_manager
+        .save_config(&config)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn update_start_minimized(
     state: tauri::State<'_, Arc<AppState>>,
     start_minimized: bool,
@@ -572,6 +585,7 @@ pub fn run() {
             get_default_video_folder,
             update_video_folder,
             update_max_cache,
+            update_video_quality,
             update_start_minimized,
             update_start_on_boot,
             check_ytdlp_exists,
