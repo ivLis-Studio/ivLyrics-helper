@@ -676,7 +676,7 @@ impl YtDlpManager {
 
         let mut args = vec![
             "-f".to_string(),
-            format_string,  // ✅ 동적으로 생성된 포맷 문자열 사용
+            format_string,  // 동적으로 생성된 포맷 문자열 사용
             "--no-playlist".to_string(),
             "--progress".to_string(),
             "--newline".to_string(),
