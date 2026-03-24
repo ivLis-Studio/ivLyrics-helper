@@ -2,6 +2,8 @@ use crate::config::AppConfig;
 use regex::Regex;
 use reqwest::Client;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{

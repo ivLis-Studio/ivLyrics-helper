@@ -1,3 +1,6 @@
+#[cfg(target_os = "windows")]
+use std::path::PathBuf;
+
 /// Create or remove an autostart entry that launches the app at login.
 pub fn set_autostart(enable: bool) -> Result<(), String> {
     #[cfg(target_os = "windows")]
