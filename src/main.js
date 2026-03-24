@@ -333,6 +333,28 @@ async function initYtDlpDownload() {
   const statusText = document.getElementById('ytdlp-status-text');
   const completeBtn = document.getElementById('setup-complete');
 
+  const startDownload = async () => {
+    downloadBtn.disabled = true;
+    downloadBtn.classList.add('hidden');
+    progressContainer.classList.remove('hidden');
+
+    statusText.textContent = t('setup.downloading');
+    progressFill.style.width = '30%';
+
+    try {
+      await invoke('download_ytdlp');
+
+      progressFill.style.width = '100%';
+      statusText.textContent = t('setup.downloadComplete');
+      completeBtn.disabled = false;
+    } catch (error) {
+      statusText.textContent = t('setup.downloadFailed') + error;
+      progressFill.style.width = '0%';
+      downloadBtn.classList.remove('hidden');
+      downloadBtn.disabled = false;
+    }
+  };
+
   // yt-dlp가 이미 있는지 확인
   try {
     const exists = await invoke('check_ytdlp_exists');
@@ -349,28 +371,10 @@ async function initYtDlpDownload() {
   }
 
   // 다운로드 버튼 클릭 이벤트
-  downloadBtn.addEventListener('click', async () => {
-    downloadBtn.disabled = true;
-    downloadBtn.classList.add('hidden');
-    progressContainer.classList.remove('hidden');
+  downloadBtn.addEventListener('click', startDownload);
 
-    statusText.textContent = t('setup.downloading');
-    progressFill.style.width = '30%';
-
-    try {
-      await invoke('download_ytdlp');
-
-      progressFill.style.width = '100%';
-      statusText.textContent = t('setup.downloadComplete');
-      completeBtn.disabled = false;
-
-    } catch (error) {
-      statusText.textContent = t('setup.downloadFailed') + error;
-      progressFill.style.width = '0%';
-      downloadBtn.classList.remove('hidden');
-      downloadBtn.disabled = false;
-    }
-  });
+  // 첫 실행 시에는 사용자 클릭 없이 바로 설치/업데이트를 시작
+  await startDownload();
 }
 
 // Main App 초기화

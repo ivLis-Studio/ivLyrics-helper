@@ -600,6 +600,7 @@ pub fn run() {
         ])
         .setup(move |app| {
             let app_state = app_state_for_server.clone();
+            let ytdlp_manager = app_state.ytdlp.clone();
 
             // 트레이 아이콘 메뉴 생성
             let show_item = MenuItem::with_id(app, "show", "Show Window", true, None::<&str>)?;
@@ -650,6 +651,14 @@ pub fn run() {
             if let Err(e) = autostart::set_autostart(start_on_boot) {
                 tracing::warn!("Failed to update autostart entry: {}", e);
             }
+
+            // 앱이 시작될 때마다 yt-dlp를 최신 버전으로 동기화
+            tauri::async_runtime::spawn(async move {
+                match ytdlp_manager.ensure_ytdlp().await {
+                    Ok(()) => tracing::info!("yt-dlp sync completed on startup"),
+                    Err(e) => tracing::warn!("Failed to sync yt-dlp on startup: {}", e),
+                }
+            });
 
             // API 서버를 별도 스레드에서 시작
             std::thread::spawn(move || {

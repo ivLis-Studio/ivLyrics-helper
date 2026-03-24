@@ -4,13 +4,34 @@ use reqwest::Client;
 
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::SystemTime;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Mutex};
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+#[derive(Debug, serde::Deserialize)]
+struct GitHubReleaseAsset {
+    name: String,
+    browser_download_url: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct GitHubRelease {
+    tag_name: String,
+    assets: Vec<GitHubReleaseAsset>,
+}
+
+struct YtDlpReleaseInfo {
+    version: String,
+    download_url: String,
+}
 
 /// yt-dlp 다운로드 진행 상황
 #[derive(Clone, Debug, serde::Serialize)]
@@ -40,6 +61,8 @@ pub struct YtDlpManager {
     client: Client,
     data_dir: PathBuf,
     videos_dir: PathBuf,
+    sync_lock: Arc<Mutex<()>>,
+    sync_completed: Arc<AtomicBool>,
 }
 
 impl YtDlpManager {
@@ -53,6 +76,8 @@ impl YtDlpManager {
             client: Client::new(),
             data_dir,
             videos_dir,
+            sync_lock: Arc::new(Mutex::new(())),
+            sync_completed: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -394,13 +419,30 @@ impl YtDlpManager {
         Ok(())
     }
 
-    /// yt-dlp가 존재하는지 확인하고, 없으면 다운로드
+    /// 앱 세션당 한 번만 yt-dlp 설치/업데이트를 동기화
     pub async fn ensure_ytdlp(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if self.sync_completed.load(Ordering::Acquire) && self.ytdlp_path().exists() {
+            return Ok(());
+        }
+
+        let _guard = self.sync_lock.lock().await;
+
+        if self.sync_completed.load(Ordering::Acquire) && self.ytdlp_path().exists() {
+            return Ok(());
+        }
+
+        self.sync_ytdlp().await?;
+        self.sync_completed.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    async fn sync_ytdlp(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // 디렉토리 생성
         tokio::fs::create_dir_all(&self.data_dir).await?;
         tokio::fs::create_dir_all(self.videos_dir()).await?;
 
         let ytdlp_path = self.ytdlp_path();
+        let had_existing_binary = ytdlp_path.exists();
 
         #[cfg(windows)]
         {
@@ -409,58 +451,176 @@ impl YtDlpManager {
             }
         }
 
-        if ytdlp_path.exists() {
-            tracing::info!("yt-dlp already exists at {:?}", ytdlp_path);
-            // 업데이트 체크는 나중에 추가 가능
-            return Ok(());
+        let latest_release = match self.fetch_latest_release().await {
+            Ok(release) => release,
+            Err(e) if had_existing_binary => {
+                tracing::warn!(
+                    "Failed to check latest yt-dlp release, using installed binary: {}",
+                    e
+                );
+                return Ok(());
+            }
+            Err(e) => return Err(e),
+        };
+
+        match self.installed_ytdlp_version().await {
+            Ok(Some(installed_version)) if installed_version == latest_release.version => {
+                tracing::info!("yt-dlp is up to date ({})", installed_version);
+                return Ok(());
+            }
+            Ok(Some(installed_version)) => {
+                tracing::info!(
+                    "Updating yt-dlp from {} to {}",
+                    installed_version,
+                    latest_release.version
+                );
+            }
+            Ok(None) => {
+                tracing::info!("yt-dlp is missing, downloading {}", latest_release.version);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to determine installed yt-dlp version, reinstalling latest: {}",
+                    e
+                );
+            }
         }
 
-        tracing::info!("Downloading yt-dlp...");
+        if let Err(e) = self
+            .download_ytdlp_binary(&latest_release.download_url, &ytdlp_path)
+            .await
+        {
+            if had_existing_binary {
+                tracing::warn!(
+                    "Failed to update yt-dlp to {}, keeping installed binary: {}",
+                    latest_release.version,
+                    e
+                );
+                return Ok(());
+            }
 
-        // GitHub API에서 최신 릴리즈 정보 가져오기
-        let release_info: serde_json::Value = self
+            return Err(e);
+        }
+
+        tracing::info!(
+            "yt-dlp synchronized successfully to {} at {:?}",
+            latest_release.version,
+            ytdlp_path
+        );
+
+        Ok(())
+    }
+
+    async fn fetch_latest_release(
+        &self,
+    ) -> Result<YtDlpReleaseInfo, Box<dyn std::error::Error + Send + Sync>> {
+        let release_info: GitHubRelease = self
             .client
             .get("https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest")
             .header("User-Agent", "ivLyrics-helper")
             .send()
             .await?
+            .error_for_status()?
             .json()
             .await?;
 
-        // 플랫폼에 맞는 실행 파일 URL 찾기
-        let assets = release_info["assets"].as_array().ok_or("No assets found")?;
         let binary_name = Self::get_ytdlp_binary_name();
-
-        let download_url = assets
+        let download_url = release_info
+            .assets
             .iter()
-            .find(|asset| {
-                asset["name"]
-                    .as_str()
-                    .map(|n| n == binary_name)
-                    .unwrap_or(false)
-            })
-            .and_then(|asset| asset["browser_download_url"].as_str())
-            .ok_or_else(|| format!("{} not found in release", binary_name))?;
+            .find(|asset| asset.name == binary_name)
+            .map(|asset| asset.browser_download_url.clone())
+            .ok_or_else(|| format!("{} not found in latest yt-dlp release", binary_name))?;
 
-        tracing::info!("Downloading from: {}", download_url);
+        Ok(YtDlpReleaseInfo {
+            version: release_info.tag_name.trim_start_matches('v').to_string(),
+            download_url,
+        })
+    }
 
-        // 다운로드
-        let response = self.client.get(download_url).send().await?;
+    async fn installed_ytdlp_version(
+        &self,
+    ) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
+        let ytdlp_path = self.ytdlp_path();
+        if !ytdlp_path.exists() {
+            return Ok(None);
+        }
+
+        let mut cmd = Command::new(&ytdlp_path);
+        cmd.arg("--version");
+
+        #[cfg(windows)]
+        {
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        let output = cmd.output().await?;
+        if !output.status.success() {
+            return Err(format!("yt-dlp --version exited with status {}", output.status).into());
+        }
+
+        let version = String::from_utf8(output.stdout)?
+            .lines()
+            .next()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(|line| line.to_string());
+
+        Ok(version)
+    }
+
+    async fn download_ytdlp_binary(
+        &self,
+        download_url: &str,
+        ytdlp_path: &PathBuf,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        tracing::info!("Downloading yt-dlp from {}", download_url);
+
+        let response = self
+            .client
+            .get(download_url)
+            .header("User-Agent", "ivLyrics-helper")
+            .send()
+            .await?
+            .error_for_status()?;
         let bytes = response.bytes().await?;
 
-        // 파일 저장
-        tokio::fs::write(&ytdlp_path, bytes).await?;
+        let file_name = ytdlp_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or("Invalid yt-dlp path")?;
+        let temp_path = ytdlp_path.with_file_name(format!("{}.download", file_name));
+        let backup_path = ytdlp_path.with_file_name(format!("{}.bak", file_name));
 
-        // macOS/Linux에서는 실행 권한 부여
+        tokio::fs::write(&temp_path, bytes).await?;
+
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mut perms = tokio::fs::metadata(&ytdlp_path).await?.permissions();
+            let mut perms = tokio::fs::metadata(&temp_path).await?.permissions();
             perms.set_mode(0o755);
-            tokio::fs::set_permissions(&ytdlp_path, perms).await?;
+            tokio::fs::set_permissions(&temp_path, perms).await?;
         }
 
-        tracing::info!("yt-dlp downloaded successfully to {:?}", ytdlp_path);
+        let had_existing_binary = ytdlp_path.exists();
+        if had_existing_binary {
+            if backup_path.exists() {
+                tokio::fs::remove_file(&backup_path).await?;
+            }
+            tokio::fs::rename(ytdlp_path, &backup_path).await?;
+        }
+
+        if let Err(e) = tokio::fs::rename(&temp_path, ytdlp_path).await {
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            if had_existing_binary && backup_path.exists() {
+                let _ = tokio::fs::rename(&backup_path, ytdlp_path).await;
+            }
+            return Err(e.into());
+        }
+
+        if had_existing_binary && backup_path.exists() {
+            let _ = tokio::fs::remove_file(&backup_path).await;
+        }
 
         Ok(())
     }
@@ -491,6 +651,8 @@ impl YtDlpManager {
             });
             return Ok(video_path);
         }
+
+        self.ensure_ytdlp().await?;
 
         // 쿠키 없이 먼저 시도
         let result = self
