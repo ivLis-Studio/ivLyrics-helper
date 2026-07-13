@@ -112,9 +112,11 @@ async fn update_video_quality(
     state: tauri::State<'_, Arc<AppState>>,
     quality: String,
 ) -> Result<(), String> {
+    let quality = config::normalize_video_quality(&quality)
+        .ok_or_else(|| format!("Unsupported video quality: {}", quality))?;
     let mut config_manager = state.config.write().await;
     let mut config = config_manager.get_config().clone();
-    config.videoQuality = quality;
+    config.videoQuality = quality.to_string();
     config_manager
         .save_config(&config)
         .map_err(|e| e.to_string())

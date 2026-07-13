@@ -1,6 +1,17 @@
 use std::fs;
 use std::path::PathBuf;
 
+pub const DEFAULT_VIDEO_QUALITY: &str = "1080p";
+pub const VIDEO_QUALITY_OPTIONS: [&str; 6] = ["best", "2160p", "1440p", "1080p", "720p", "480p"];
+
+pub fn normalize_video_quality(quality: &str) -> Option<&'static str> {
+    let quality = quality.trim();
+    VIDEO_QUALITY_OPTIONS
+        .iter()
+        .copied()
+        .find(|candidate| *candidate == quality)
+}
+
 /// 앱 설정 (JavaScript와 호환을 위해 camelCase 사용)
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[allow(non_snake_case)]
@@ -20,7 +31,7 @@ pub struct AppConfig {
     /// cookies.txt 파일 경로 (YouTube 성인인증 영상에 필요)
     #[serde(default)]
     pub cookiesFile: String,
-    /// 비디오 화질 설정 (2160p, 1440p, 1080p, 720p, 480p)
+    /// 비디오 최대 화질 설정 (best, 2160p, 1440p, 1080p, 720p, 480p)
     #[serde(default = "default_video_quality")]
     pub videoQuality: String,
 }
@@ -33,9 +44,8 @@ fn default_language() -> String {
     "en".to_string()
 }
 
-//  기본 화질 함수 추가
 fn default_video_quality() -> String {
-    "1080p".to_string()
+    DEFAULT_VIDEO_QUALITY.to_string()
 }
 
 impl Default for AppConfig {
@@ -48,7 +58,7 @@ impl Default for AppConfig {
             startOnBoot: false,
             language: "en".to_string(),
             cookiesFile: String::new(),
-            videoQuality: "1080p".to_string(), //  기본값 추가
+            videoQuality: DEFAULT_VIDEO_QUALITY.to_string(),
         }
     }
 }
@@ -71,7 +81,7 @@ impl ConfigManager {
         let _ = fs::create_dir_all(&data_dir);
 
         // 설정 로드 또는 기본값 사용
-        let config = if config_path.exists() {
+        let mut config = if config_path.exists() {
             match fs::read_to_string(&config_path) {
                 Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
                 Err(_) => AppConfig::default(),
@@ -81,6 +91,9 @@ impl ConfigManager {
             default_config.videoFolder = data_dir.join("videos").to_string_lossy().to_string();
             default_config
         };
+        config.videoQuality = normalize_video_quality(&config.videoQuality)
+            .unwrap_or(DEFAULT_VIDEO_QUALITY)
+            .to_string();
 
         Self {
             config_path,
@@ -113,17 +126,18 @@ impl ConfigManager {
             .join("videos")
     }
 
-    // 비디오 화질 가져오기 메서드 추가
     pub fn get_video_quality(&self) -> String {
-        if self.config.videoQuality.is_empty() {
-            "1080p".to_string()
-        } else {
-            self.config.videoQuality.clone()
-        }
+        normalize_video_quality(&self.config.videoQuality)
+            .unwrap_or(DEFAULT_VIDEO_QUALITY)
+            .to_string()
     }
 
     pub fn save_config(&mut self, config: &AppConfig) -> Result<(), Box<dyn std::error::Error>> {
-        self.config = config.clone();
+        let mut config = config.clone();
+        config.videoQuality = normalize_video_quality(&config.videoQuality)
+            .unwrap_or(DEFAULT_VIDEO_QUALITY)
+            .to_string();
+        self.config = config;
 
         // 디렉토리 생성
         if let Some(parent) = self.config_path.parent() {
@@ -139,5 +153,21 @@ impl ConfigManager {
         fs::write(&self.config_path, content)?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_only_supported_video_qualities() {
+        for quality in VIDEO_QUALITY_OPTIONS {
+            assert_eq!(normalize_video_quality(quality), Some(quality));
+        }
+
+        assert_eq!(normalize_video_quality(" 720p "), Some("720p"));
+        assert_eq!(normalize_video_quality("4320p"), None);
+        assert_eq!(normalize_video_quality(""), None);
     }
 }

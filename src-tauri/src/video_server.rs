@@ -91,9 +91,10 @@ async fn handle_video_request(
             .into_response();
     }
 
-    // 이미 존재하는 경우 바로 응답
-    if ytdlp.video_exists(video_id) {
-        let video_path = ytdlp.video_path(video_id);
+    let quality = ytdlp.current_video_quality().await;
+
+    // 현재 화질 설정과 일치하는 캐시가 있으면 바로 응답
+    if let Some(video_path) = ytdlp.cached_video_path(video_id, &quality).await {
         let default_name = format!("{}.webm", video_id);
         let file_name = video_path
             .file_name()
@@ -111,7 +112,7 @@ async fn handle_video_request(
     }
 
     // 진행 중 다운로드가 있으면 합류, 없으면 새 다운로드 시작
-    let progress_rx = coordinator.start_or_subscribe(video_id).await;
+    let progress_rx = coordinator.start_or_subscribe(video_id, &quality).await;
 
     // SSE 스트림 생성
     let stream = create_progress_stream(progress_rx);
@@ -130,8 +131,8 @@ async fn handle_video_status(
     let video_id = query.id.trim();
     let ytdlp = &coordinator.ytdlp;
 
-    if ytdlp.video_exists(video_id) {
-        let video_path = ytdlp.video_path(video_id);
+    let quality = ytdlp.current_video_quality().await;
+    if let Some(video_path) = ytdlp.cached_video_path(video_id, &quality).await {
         let default_name = format!("{}.webm", video_id);
         let file_name = video_path
             .file_name()
@@ -198,9 +199,12 @@ impl DownloadCoordinator {
     pub async fn start_or_subscribe(
         &self,
         video_id: &str,
+        quality: &str,
     ) -> broadcast::Receiver<DownloadProgress> {
+        let download_key = format!("{}:{}", video_id, quality);
+
         // 이미 진행 중인 다운로드가 있으면 해당 채널에 합류
-        if let Some(sender) = self.in_progress.lock().await.get(video_id) {
+        if let Some(sender) = self.in_progress.lock().await.get(&download_key) {
             return sender.subscribe();
         }
 
@@ -209,14 +213,17 @@ impl DownloadCoordinator {
         self.in_progress
             .lock()
             .await
-            .insert(video_id.to_string(), tx.clone());
+            .insert(download_key.clone(), tx.clone());
 
         // 다운로드 작업 시작
         let video_id_owned = video_id.to_string();
+        let quality_owned = quality.to_string();
         let ytdlp = self.ytdlp.clone();
         let in_progress = self.in_progress.clone();
         tokio::spawn(async move {
-            let result = ytdlp.download_video(&video_id_owned, tx.clone()).await;
+            let result = ytdlp
+                .download_video(&video_id_owned, &quality_owned, tx.clone())
+                .await;
 
             if let Err(e) = result {
                 let _ = tx.send(DownloadProgress {
@@ -230,7 +237,7 @@ impl DownloadCoordinator {
             }
 
             // 다운로드가 끝났으니 in-progress 목록에서 제거
-            in_progress.lock().await.remove(&video_id_owned);
+            in_progress.lock().await.remove(&download_key);
         });
 
         rx

@@ -58,7 +58,7 @@ const i18n = {
     'api.videoRequest': 'Download YouTube video and return streaming URL',
     'api.videoRequestDetail1': 'Returns URL immediately if file exists',
     'api.videoRequestDetail2': 'Streams download progress via SSE if not',
-    'api.videoRequestDetail3': 'Auto-selects 1080p WebM (no audio)',
+    'api.videoRequestDetail3': 'Uses the configured maximum quality (video only)',
     'api.videoStatus': 'Check video download status',
     'api.videoFiles': 'Serve downloaded video files',
 
@@ -70,8 +70,9 @@ const i18n = {
     'confirm.clearCache': 'Delete all cached videos?',
     'unknown': 'Unknown',
 
-    'settings.videoQuality': 'Video Quality',
-    'settings.videoQualityHint': 'Select preferred quality for downloads',
+    'settings.videoQuality': 'Maximum Video Quality',
+    'settings.qualityBest': 'Best available',
+    'settings.videoQualityHint': 'Caps new downloads at this resolution. Cached copies are kept separately for each quality.',
   },
   ko: {
     'setup.subtitle': '처음 사용하기 전 기본 설정을 완료해주세요.',
@@ -126,7 +127,7 @@ const i18n = {
     'api.videoRequest': 'YouTube 영상 다운로드 및 스트리밍 URL 반환',
     'api.videoRequestDetail1': '기존 파일이 있으면 즉시 URL 반환',
     'api.videoRequestDetail2': '없으면 SSE로 다운로드 진행상황 스트리밍',
-    'api.videoRequestDetail3': '1080p WebM (무음) 자동 선택',
+    'api.videoRequestDetail3': '설정한 최대 화질의 영상 전용 스트림 사용',
     'api.videoStatus': '영상 다운로드 상태 확인',
     'api.videoFiles': '다운로드된 영상 파일 서빙',
 
@@ -138,8 +139,9 @@ const i18n = {
     'confirm.clearCache': '모든 캐시된 영상을 삭제하시겠습니까?',
     'unknown': '알 수 없음',
 
-    'settings.videoQuality': '영상 화질',
-    'settings.videoQualityHint': '다운로드할 영상의 화질을 선택하세요'
+    'settings.videoQuality': '최대 영상 화질',
+    'settings.qualityBest': '사용 가능한 최고 화질',
+    'settings.videoQualityHint': '새 다운로드의 최대 해상도를 제한합니다. 캐시는 화질별로 따로 보관됩니다.'
   }
 };
 
@@ -547,14 +549,19 @@ async function initVideoServiceSettings() {
   // 화질 변경 이벤트 추가
   if (qualitySelect) {
     qualitySelect.addEventListener('change', async () => {
+      const previousQuality = appState.config.videoQuality || '1080p';
+      qualitySelect.disabled = true;
       try {
         const quality = qualitySelect.value;
-        await invoke('update_video_quality', { quality: quality });
+        await invoke('update_video_quality', { quality });
         appState.config.videoQuality = quality;
         showSaveStatus(t('settings.saved'));
       } catch (error) {
         console.error('Failed to save video quality:', error);
+        qualitySelect.value = previousQuality;
         showSaveStatus(t('settings.saveFailed'), 'error');
+      } finally {
+        qualitySelect.disabled = false;
       }
     });
   }

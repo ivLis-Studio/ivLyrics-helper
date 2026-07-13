@@ -1,4 +1,4 @@
-use crate::config::AppConfig;
+use crate::config::{normalize_video_quality, AppConfig, DEFAULT_VIDEO_QUALITY};
 use regex::Regex;
 use reqwest::Client;
 
@@ -113,9 +113,40 @@ impl YtDlpManager {
         self.videos_dir.clone()
     }
 
-    /// 특정 비디오 파일 경로
-    pub fn video_path(&self, video_id: &str) -> PathBuf {
-        self.videos_dir().join(format!("{}.webm", video_id))
+    pub async fn current_video_quality(&self) -> String {
+        self.get_video_quality().await
+    }
+
+    /// 지정한 화질 설정과 일치하는 캐시 파일 경로
+    pub async fn cached_video_path(&self, video_id: &str, quality: &str) -> Option<PathBuf> {
+        let quality_prefix = format!("{}.{}.", video_id, quality);
+        let mut entries = tokio::fs::read_dir(self.videos_dir()).await.ok()?;
+
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            let is_video = path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .map(|extension| {
+                    matches!(
+                        extension.to_ascii_lowercase().as_str(),
+                        "webm" | "mp4" | "mkv" | "mov" | "m4v"
+                    )
+                })
+                .unwrap_or(false);
+
+            if !is_video {
+                continue;
+            }
+
+            let file_name = entry.file_name();
+            let file_name = file_name.to_string_lossy();
+            if file_name.starts_with(&quality_prefix) {
+                return Some(path);
+            }
+        }
+
+        None
     }
 
     /// 설치된 브라우저 감지 (Windows)
@@ -627,22 +658,17 @@ impl YtDlpManager {
         Ok(())
     }
 
-    /// 비디오가 이미 존재하는지 확인
-    pub fn video_exists(&self, video_id: &str) -> bool {
-        self.video_path(video_id).exists()
-    }
-
     /// 비디오 다운로드 (진행 상황을 broadcast 채널로 전송)
     pub async fn download_video(
         &self,
         video_id: &str,
+        quality: &str,
         progress_tx: broadcast::Sender<DownloadProgress>,
     ) -> Result<PathBuf, Box<dyn std::error::Error + Send + Sync>> {
-        let video_path = self.video_path(video_id);
         let video_id_owned = video_id.to_string();
 
-        // 이미 존재하면 바로 반환
-        if video_path.exists() {
+        // 현재 화질과 일치하는 파일이 이미 있으면 바로 반환
+        if let Some(video_path) = self.cached_video_path(video_id, quality).await {
             let _ = progress_tx.send(DownloadProgress {
                 video_id: video_id_owned,
                 status: DownloadStatus::AlreadyExists,
@@ -658,7 +684,7 @@ impl YtDlpManager {
 
         // 쿠키 없이 먼저 시도
         let result = self
-            .try_download_video(video_id, &progress_tx, None, None)
+            .try_download_video(video_id, quality, &progress_tx, None, None)
             .await;
 
         match result {
@@ -688,6 +714,7 @@ impl YtDlpManager {
                             match self
                                 .try_download_video(
                                     video_id,
+                                    quality,
                                     &progress_tx,
                                     None,
                                     Some(cookies_path.as_str()),
@@ -735,7 +762,13 @@ impl YtDlpManager {
                         });
 
                         match self
-                            .try_download_video(video_id, &progress_tx, Some(browser), None)
+                            .try_download_video(
+                                video_id,
+                                quality,
+                                &progress_tx,
+                                Some(browser),
+                                None,
+                            )
                             .await
                         {
                             Ok(path) => {
@@ -804,6 +837,7 @@ impl YtDlpManager {
     async fn try_download_video(
         &self,
         video_id: &str,
+        video_quality: &str,
         progress_tx: &broadcast::Sender<DownloadProgress>,
         browser: Option<&str>,
         cookies_file: Option<&str>,
@@ -829,18 +863,17 @@ impl YtDlpManager {
         });
 
         let url = format!("https://www.youtube.com/watch?v={}", video_id);
-        let output_template = self.videos_dir().join("%(id)s.%(ext)s");
-
-        // 설정에서 화질 가져오기
-        let video_quality = self.get_video_quality().await;
-        let format_string = self.get_format_string(&video_quality);
+        let output_template = self
+            .videos_dir()
+            .join(format!("%(id)s.{}.%(ext)s", video_quality));
+        let format_string = Self::get_format_string(&video_quality);
 
         // yt-dlp 명령 구성
         let mut cmd = Command::new(self.ytdlp_path());
 
         let mut args = vec![
             "-f".to_string(),
-            format_string,  // 동적으로 생성된 포맷 문자열 사용
+            format_string,
             "--no-playlist".to_string(),
             "--progress".to_string(),
             "--newline".to_string(),
@@ -956,22 +989,7 @@ impl YtDlpManager {
         let combined_stderr = stderr_lines.join("\n");
 
         if status.success() {
-            // 다운로드된 파일 찾기
-            let videos_dir = self.videos_dir();
-            let mut found_path = None;
-
-            if let Ok(mut entries) = tokio::fs::read_dir(&videos_dir).await {
-                while let Ok(Some(entry)) = entries.next_entry().await {
-                    let file_name = entry.file_name();
-                    let file_name_str = file_name.to_string_lossy();
-                    if file_name_str.starts_with(video_id) {
-                        found_path = Some(entry.path());
-                        break;
-                    }
-                }
-            }
-
-            if let Some(path) = found_path {
+            if let Some(path) = self.cached_video_path(video_id, video_quality).await {
                 let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
                 // Cache pruning (best effort)
@@ -1063,43 +1081,57 @@ impl YtDlpManager {
         // 기본값 10GB
         10 * 1024 * 1024 * 1024
     }
-    // 설정에서 화질 가져오기
     async fn get_video_quality(&self) -> String {
         let config_path = self.data_dir.join("config.json");
         if let Ok(content) = tokio::fs::read(&config_path).await {
             if let Ok(cfg) = serde_json::from_slice::<AppConfig>(&content) {
-                if !cfg.videoQuality.is_empty() {
-                    return cfg.videoQuality;
+                if let Some(quality) = normalize_video_quality(&cfg.videoQuality) {
+                    return quality.to_string();
                 }
             }
         }
 
-        // 기본값 1080p
-        "1080p".to_string()
+        DEFAULT_VIDEO_QUALITY.to_string()
     }
 
-    // 화질에 따른 포맷 문자열 생성
-fn get_format_string(&self, quality: &str) -> String {
-    match quality {
-        "2160p" => {
-            // 4K: 단일 스트림 우선 (병합 불필요)
-            "bestvideo[height<=2160][ext=webm]/bestvideo[height<=2160]/best[height<=2160]/best"
+    fn get_format_string(quality: &str) -> String {
+        if quality == "best" {
+            return "bestvideo".to_string();
         }
-        "1440p" => {
-            "bestvideo[height<=1440][ext=webm]/bestvideo[height<=1440]/best[height<=1440]/best"
+
+        let height = match quality {
+            "2160p" => 2160,
+            "1440p" => 1440,
+            "720p" => 720,
+            "480p" => 480,
+            _ => 1080,
+        };
+
+        format!("bestvideo[height<={}]", height)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::YtDlpManager;
+
+    #[test]
+    fn format_string_caps_each_configured_resolution() {
+        for (quality, height) in [
+            ("2160p", 2160),
+            ("1440p", 1440),
+            ("1080p", 1080),
+            ("720p", 720),
+            ("480p", 480),
+        ] {
+            let format = YtDlpManager::get_format_string(quality);
+            assert!(format.contains(&format!("height<={}", height)));
+            assert!(!format.ends_with("/best"));
         }
-        "1080p" => {
-            "bestvideo[height<=1080][ext=webm]/bestvideo[height<=1080]/best[height<=1080]/best"
-        }
-        "720p" => {
-            "bestvideo[height<=720][ext=webm]/bestvideo[height<=720]/best[height<=720]/best"
-        }
-        "480p" => {
-            "bestvideo[height<=480][ext=webm]/bestvideo[height<=480]/best[height<=480]/best"
-        }
-        _ => {
-            "bestvideo[height<=1080][ext=webm]/bestvideo[height<=1080]/best[height<=1080]/best"
-        }
-        }.to_string()
+    }
+
+    #[test]
+    fn best_format_stays_video_only() {
+        assert_eq!(YtDlpManager::get_format_string("best"), "bestvideo");
     }
 }
