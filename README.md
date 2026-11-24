@@ -121,4 +121,4 @@ Helper는 같은 컴퓨터의 `127.0.0.1:15123`에서 동작합니다. 전달받
 
 [PC용 ivLyrics](https://github.com/ivLis-Studio/ivLyrics) · [Android](https://github.com/ivLis-Studio/ivLyrics-Android) · [iOS](https://github.com/ivLis-Studio/ivLyrics-IOS) · [ivLyrics Overlay](https://github.com/ivLis-Studio/ivLyrics-overlay)
 
-이 저장소의 라이선스는 [GNU LGPL v2.1](LICENSE)입니다. 앱은 [Tauri](https://tauri.app/)를 사용하며, 영상 다운로드에는 [yt-dlp](https://github.com/yt-dlp/yt-dlp)와 Windows용 [Deno](https://github.com/denoland/deno)를 사용합니다. 각 프로젝트의 라이선스와 고지는 해당 프로젝트에서 확인하세요.
+이 저장소는 [ivLyrics Source-Available License 1.0](LICENSE)을 따릅니다. 소스를 읽고 포크해서 고쳐 보거나 PR로 기여할 수 있지만, 공식 채널 밖에서 재배포하거나 코드를 다른 프로그램에 넣을 수는 없습니다. 법적 효력은 영문 LICENSE 전문을 기준으로 합니다. LGPL 시절 외부 기여가 들어간 파일과 v0.2.1까지의 릴리스는 [GNU LGPL v2.1](LICENSES/LGPL-2.1.txt)로 남으며, 자세한 내용은 [NOTICE.md](NOTICE.md)에 있습니다. 앱은 [Tauri](https://tauri.app/)를 사용하며, 영상 다운로드에는 [yt-dlp](https://github.com/yt-dlp/yt-dlp)와 Windows용 [Deno](https://github.com/denoland/deno)를 사용합니다. 각 프로젝트의 라이선스와 고지는 해당 프로젝트에서 확인하세요.
